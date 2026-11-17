@@ -245,7 +245,15 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         </button>
         <span className="book-name grow">{book.title}</span>
         <span className={`status${save.error ? ' err' : ''}`}>{save.error ? '기기에 저장됨 · 연결되면 보내요' : save.pending || timers.current.size ? '저장 중…' : '저장됨'}</span>
-        <div className="seg" role="tablist" aria-label="보기">
+        <select className="input view-select" value={view} onChange={(e) => setView(e.target.value as View)} aria-label="보기 고르기">
+          <option value="write">원고</option>
+          <option value="cork">코르크보드</option>
+          <option value="outline">개요</option>
+          <option value="stats">통계</option>
+          <option value="notes">작가 노트</option>
+          <option value="settings">책 설정</option>
+        </select>
+        <div className="seg view-seg" role="tablist" aria-label="보기">
           {(
             [
               ['write', '원고', 'pen'],

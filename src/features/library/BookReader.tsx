@@ -5,7 +5,7 @@ import { Icon, Spinner, toast } from '../../lib/ui';
 import { Reader } from './Reader';
 
 /** 내 책 읽기 (내가 쓴 책 · 들인 책). 받아 둔 사본이 있으면 인터넷 없이도 열린다 */
-export function BookReader({ bookId, nodeId, at }: { bookId: string; nodeId?: string; at?: string | null }) {
+export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeId?: string; at?: string | null; find?: string | null }) {
   const [data, setData] = useState<FullBook | null>(null);
   const [err, setErr] = useState('');
   useEffect(() => {
@@ -48,6 +48,7 @@ export function BookReader({ bookId, nodeId, at }: { bookId: string; nodeId?: st
       title={data.book.title}
       nodes={nodes}
       progressKey={`b:${bookId}`}
+      initialFind={find ?? undefined}
       start={nodeId ? { n: nodeId, o: Number(at ?? 0) } : null}
       onExit={() => (history.length > 1 ? history.back() : go('library'))}
       extraButtons={

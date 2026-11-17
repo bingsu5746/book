@@ -300,6 +300,7 @@ export function BookSettings({ book, onPatch, onWorldLinked }: { book: Book; onP
   const worlds = useAsync(() => api<{ worlds: World[] }>('worlds'), []);
   const [editions, setEditions] = useState<{ id: string; number: number; note: string; created: number; chars: number }[] | null>(null);
   const [shared, setShared] = useState(!!book.shared);
+  const [shareWorld, setShareWorld] = useState(!!book.share_world);
   const loadEd = () =>
     api(`books/${book.id}/editions`)
       .then((r) => setEditions(r.editions))
@@ -311,7 +312,7 @@ export function BookSettings({ book, onPatch, onWorldLinked }: { book: Book; onP
     const note = await promptBox('이번 판에 남길 말 (친구에게 보여요)', '', { placeholder: '예: 2부까지 고쳤어요. 4장 대사를 봐 주세요.', ok: '공유하기', multiline: true });
     if (note == null) return;
     try {
-      const r = await api(`books/${book.id}/publish`, { body: { note, share_world: !!book.share_world } });
+      const r = await api(`books/${book.id}/publish`, { body: { note, share_world: shareWorld } });
       setShared(true);
       toast(`${r.edition.number}판을 공유했어요`);
       void loadEd();
@@ -395,7 +396,15 @@ export function BookSettings({ book, onPatch, onWorldLinked }: { book: Book; onP
         <h3 className="serif">열람실에 공유</h3>
         <p className="muted small">공유하면 지금 원고를 「판」으로 찍어 친구에게 보여요. 계속 고쳐도 친구가 읽는 글은 그대로이고, 새 판을 찍으면 바뀌어요. 메모(바인더의 「메모」)와 %%작가 메모%%는 빠져요.</p>
         <label className="check">
-          <input type="checkbox" checked={!!book.share_world} onChange={(e) => onPatch({ share_world: e.target.checked })} disabled={!book.world_id} />
+          <input
+            type="checkbox"
+            checked={shareWorld}
+            onChange={(e) => {
+              setShareWorld(e.target.checked);
+              onPatch({ share_world: e.target.checked });
+            }}
+            disabled={!book.world_id}
+          />
           세계관도 함께 보여 주기 (읽기만)
         </label>
         <div className="row wrap">

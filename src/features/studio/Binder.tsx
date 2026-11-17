@@ -150,7 +150,7 @@ export function Binder({ nodes, sel, onSelect, act }: { nodes: BookNode[]; sel: 
                 });
               }}
             >
-              {k ? (closed.has(n.id) ? '▸' : '▾') : ''}
+              {k && <span style={{ display: 'inline-flex', transform: closed.has(n.id) ? 'rotate(180deg)' : 'rotate(-90deg)' }}><Icon name="back" size={12} /></span>}
             </span>
             {n.kind !== 'part' && <span className={`dot ${n.status}`} style={n.label ? { background: n.label } : undefined} />}
             <span className="t">{n.title || (n.kind === 'note' ? '메모' : `제목 없는 ${KIND_LABEL[n.kind]}`)}</span>

@@ -269,7 +269,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
           </a>
         </div>
       )}
-      <div className="r-scroll" ref={sc} onMouseUp={onPointerUp} onTouchEnd={onPointerUp} onClick={(e) => {
+      <div className="r-scroll" ref={sc} style={{ paddingRight: pane && innerWidth > 1100 ? 380 : undefined }} onMouseUp={onPointerUp} onTouchEnd={onPointerUp} onClick={(e) => {
         const m = (e.target as HTMLElement).closest<HTMLElement>('mark[data-note]');
         if (m) {
           setActive(m.dataset.note!);
@@ -277,7 +277,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
           setTimeout(() => document.getElementById(`note-${m.dataset.note}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
         }
       }}>
-        <div className="col prose" style={{ paddingRight: pane && innerWidth > 1100 ? 400 : undefined }}>
+        <div className="col prose">
           <div style={{ textAlign: 'center', padding: '3em 0 2em' }}>
             <h1 style={{ textAlign: 'center', padding: 0 }}>{d.book.title}</h1>
             <p style={{ textIndent: 0, textAlign: 'center', color: 'var(--rmuted)', fontFamily: 'var(--sans)', fontSize: 14 }}>

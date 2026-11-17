@@ -41,6 +41,7 @@ export function Reader({
   onExit,
   extraButtons,
   forceMode,
+  initialFind,
 }: {
   title: string;
   nodes: ReadNode[];
@@ -49,6 +50,7 @@ export function Reader({
   onExit: () => void;
   extraButtons?: React.ReactNode;
   forceMode?: 'page' | 'scroll';
+  initialFind?: string;
 }) {
   const [prefs, setPrefsState] = useState<ReaderPrefs>(loadPrefs);
   const setPrefs = (p: Partial<ReaderPrefs>) =>
@@ -58,7 +60,7 @@ export function Reader({
       return v;
     });
   const mode = forceMode ?? prefs.mode;
-  const [pop, setPop] = useState<'' | 'toc' | 'set' | 'marks' | 'find'>('');
+  const [pop, setPop] = useState<'' | 'toc' | 'set' | 'marks' | 'find'>(initialFind ? 'find' : '');
   const [chrome, setChrome] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -72,7 +74,7 @@ export function Reader({
   const order = useMemo(() => nodes.map((n) => n.id), [nodes]);
   const blocks = useMemo(() => buildBlocks(nodes), [nodes]);
   const [marks, setMarks] = useState<Bookmark[]>([]);
-  const [find, setFind] = useState('');
+  const [find, setFind] = useState(initialFind ?? '');
 
   // 저장된 읽던 자리 (서버 → 없으면 기기)
   const [ready, setReady] = useState(!!start || !progressKey);

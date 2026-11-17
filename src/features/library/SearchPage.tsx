@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
 import { go } from '../../lib/router';
+import { plain } from '../../lib/text';
 import { Empty, Icon, Spinner } from '../../lib/ui';
 
 interface Hit {
@@ -116,7 +117,7 @@ export function SearchPage({ q: initial }: { q: string }) {
                 style={{ display: 'block' }}
                 onClick={() => {
                   if (h.where === 'shared') go(`edition/${h.edition_id}/${h.node_id}`);
-                  else go(`read/${h.book_id}/${h.node_id}`);
+                  else go(`read/${h.book_id}/${h.node_id}?find=${encodeURIComponent(q)}`);
                 }}
               >
                 <div className="row">
@@ -137,7 +138,7 @@ export function SearchPage({ q: initial }: { q: string }) {
                 </div>
                 {h.snippets.map((s, i) => (
                   <p key={i} className="snip">
-                    <Snip text={s.text} q={q} />
+                    <Snip text={plain(s.text)} q={q} />
                   </p>
                 ))}
               </button>
