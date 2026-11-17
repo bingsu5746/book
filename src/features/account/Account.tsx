@@ -6,11 +6,13 @@ import { useSession } from '../../lib/session';
 import { hasUnsaved } from '../../lib/store';
 import { confirmBox, Icon, promptBox, toast } from '../../lib/ui';
 import { today } from '../../lib/text';
+import { restoreBackup } from '../../lib/restore';
 
 export function Account() {
   const { user, setUser } = useSession();
   const [theme, setTheme] = useState(local.get<string>('theme', 'auto'));
   const [pw, setPw] = useState({ current: '', password: '' });
+  const [restoring, setRestoring] = useState('');
 
   const applyTheme = (t: string) => {
     setTheme(t);
@@ -40,6 +42,13 @@ export function Account() {
           <a className="btn" href="#/search">
             <Icon name="search" size={16} />
             찾기
+          </a>
+          <button onClick={() => dispatchEvent(new Event('quick-jump'))}>
+            <Icon name="command" size={16} />
+            빠른 이동
+          </button>
+          <a className="btn" href="#/lines">
+            밑줄 모음
           </a>
         </div>
       </div>
@@ -115,6 +124,40 @@ export function Account() {
               <Icon name="download" size={16} />
               전부 내려받기
             </button>
+          </div>
+          <p className="muted small">백업 파일로 되살리면 책 · 원고 · 세계관이 새 사본으로 더해져요 (지금 있는 것은 그대로). 그림(초상 · 지도)은 백업에 들어가지 않아요.</p>
+          <div>
+            <label className="btn">
+              <Icon name="upload" size={16} />
+              {restoring || '백업에서 되살리기'}
+              <input
+                type="file"
+                accept=".json,application/json"
+                hidden
+                disabled={!!restoring}
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!f) return;
+                  let data: unknown;
+                  try {
+                    data = JSON.parse(await f.text());
+                  } catch {
+                    return toast('JSON 파일을 읽지 못했어요.', 'err');
+                  }
+                  const d = data as { books?: unknown[]; worlds?: unknown[] };
+                  if (!(await confirmBox(`책 ${d.books?.length ?? 0}권 · 세계 ${d.worlds?.length ?? 0}개를 새 사본으로 되살릴까요?`, { ok: '되살리기' }))) return;
+                  try {
+                    const r = await restoreBackup(data, setRestoring);
+                    toast(`책 ${r.books}권 · 세계 ${r.worlds}개를 되살렸어요${r.skippedImages ? ` (그림 ${r.skippedImages}개는 빠졌어요)` : ''}`);
+                  } catch (err) {
+                    toast((err as Error).message, 'err');
+                  } finally {
+                    setRestoring('');
+                  }
+                }}
+              />
+            </label>
           </div>
         </section>
         <section className="panel stack">

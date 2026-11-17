@@ -5,7 +5,9 @@ import { api } from '../../lib/api';
 import { local } from '../../lib/idb';
 import { buildBlocks, pageOf, paginate, type Page, type TocEntry } from '../../lib/paginate';
 import type { ReadNode } from '../../lib/types';
-import { Icon, toast } from '../../lib/ui';
+import { Icon, promptBox, toast } from '../../lib/ui';
+import { highlightRange, rangeOffsets } from '../../lib/anchor';
+import { speak, speakSupported, stopSpeaking } from '../studio/StudioTools';
 
 export interface ReaderPrefs {
   fs: number;
@@ -26,6 +28,7 @@ interface Bookmark {
   quote: string;
   note: string;
   at: number;
+  kind?: 'mark' | 'line';
 }
 
 export interface Spot {
@@ -75,6 +78,59 @@ export function Reader({
   const blocks = useMemo(() => buildBlocks(nodes), [nodes]);
   const [marks, setMarks] = useState<Bookmark[]>([]);
   const [find, setFind] = useState(initialFind ?? '');
+  const [markTab, setMarkTab] = useState<'mark' | 'line'>('mark');
+  const [selPop, setSelPop] = useState<{ x: number; y: number; n: string; pos: number; quote: string } | null>(null);
+  const [speaking, setSpeaking] = useState(false);
+  useEffect(() => () => stopSpeaking(), []);
+  const lines = marks.filter((m) => m.kind === 'line');
+
+  /** 고른 글 → (장 id, 장 안 위치, 글) */
+  const readSelection = () => {
+    setTimeout(() => {
+      const s = getSelection();
+      if (!s || s.isCollapsed || !s.rangeCount || !progressKey) return setSelPop(null);
+      const r = s.getRangeAt(0);
+      const start = (r.startContainer.nodeType === 1 ? (r.startContainer as Element) : r.startContainer.parentElement)?.closest<HTMLElement>('[data-n]');
+      if (!start) return setSelPop(null);
+      const sub = document.createRange();
+      sub.setStart(r.startContainer, r.startOffset);
+      sub.setEnd(start.contains(r.endContainer) ? r.endContainer : start, start.contains(r.endContainer) ? r.endOffset : start.childNodes.length);
+      const off = rangeOffsets(start, sub);
+      const quote = String(s).trim();
+      if (!off || !quote) return setSelPop(null);
+      const rect = r.getBoundingClientRect();
+      setSelPop({ x: rect.left + rect.width / 2, y: rect.top, n: start.dataset.n!, pos: Number(start.dataset.o ?? 0) + off.start, quote: quote.slice(0, 1000) });
+    }, 10);
+  };
+  const addLine = async (withNote: boolean) => {
+    if (!selPop || !progressKey) return;
+    const note = withNote ? await promptBox('밑줄에 남길 메모', '', { multiline: true, ok: '남기기' }) : '';
+    if (note == null) return;
+    try {
+      const r = await api<{ id: string }>('bookmarks', { body: { key: progressKey, node_id: selPop.n, pos: selPop.pos, quote: selPop.quote, note, kind: 'line' } });
+      setMarks((m) => [{ id: r.id, key: progressKey, node_id: selPop.n, pos: selPop.pos, quote: selPop.quote, note, at: Date.now(), kind: 'line' }, ...m]);
+      getSelection()?.removeAllRanges();
+      setSelPop(null);
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    }
+  };
+  /** 화면에 보이는 덩어리 안에 밑줄 그리기 */
+  const paintLines = (root: HTMLElement | null) => {
+    if (!root) return;
+    root.querySelectorAll('mark.line').forEach((m) => m.replaceWith(...m.childNodes));
+    root.normalize();
+    for (const l of lines) {
+      for (const el of root.querySelectorAll<HTMLElement>(`[data-n="${l.node_id}"]`)) {
+        const o = Number(el.dataset.o ?? 0);
+        const len = (el.textContent ?? '').length;
+        const a = l.pos - o;
+        const b = a + l.quote.length;
+        if (b <= 0 || a >= len) continue;
+        highlightRange(el, Math.max(0, a), Math.min(len, b), { class: 'line', title: l.note || '밑줄' });
+      }
+    }
+  };
 
   // 저장된 읽던 자리 (서버 → 없으면 기기)
   const [ready, setReady] = useState(!!start || !progressKey);
@@ -302,6 +358,10 @@ export function Reader({
     return k;
   })();
 
+  useEffect(() => {
+    paintLines(mode === 'page' ? stageRef.current : scrollRef.current);
+  }); // 쪽이 바뀔 때마다 (React 가 쪽 내용을 새로 넣은 뒤)
+
   const pct = mode === 'page' && pages.length ? Math.round(((idx + n2) / pages.length) * 100) : null;
 
   return (
@@ -316,6 +376,29 @@ export function Reader({
         </button>
         <div className="name">{title}</div>
         {extraButtons}
+        {speakSupported() && (
+          <button
+            className="icon-btn"
+            aria-label={speaking ? '읽기 멈추기' : '소리 내어 읽기 (지금 자리부터 이 장 끝까지)'}
+            title={speaking ? '읽기 멈추기' : '소리 내어 읽기'}
+            aria-pressed={speaking}
+            onClick={() => {
+              if (speaking) {
+                stopSpeaking();
+                return setSpeaking(false);
+              }
+              const s = spot.current ?? { n: order[0], o: 0 };
+              const text = blocks
+                .filter((b) => b.dataset.n === s.n && Number(b.dataset.o ?? 0) + (b.textContent ?? '').length > s.o)
+                .map((b) => b.textContent ?? '')
+                .join('\n\n');
+              setSpeaking(true);
+              speak(text, () => setSpeaking(false));
+            }}
+          >
+            <Icon name={speaking ? 'close' : 'sound'} />
+          </button>
+        )}
         <button className="icon-btn" aria-label="책 안에서 찾기" aria-pressed={pop === 'find'} onClick={() => setPop(pop === 'find' ? '' : 'find')}>
           <Icon name="search" />
         </button>
@@ -424,19 +507,47 @@ export function Reader({
         </div>
       )}
       {pop === 'marks' && (
-        <div className="r-pop" role="dialog" aria-label="책갈피">
-          <div className="pad">
-            <button onClick={addMark}>
-              <Icon name="plus" size={16} />
-              지금 자리에 책갈피
-            </button>
+        <div className="r-pop" role="dialog" aria-label="책갈피 · 밑줄">
+          <div className="pad row">
+            <div className="seg">
+              <button className={markTab === 'mark' ? 'on' : ''} onClick={() => setMarkTab('mark')}>
+                책갈피
+              </button>
+              <button className={markTab === 'line' ? 'on' : ''} onClick={() => setMarkTab('line')}>
+                밑줄 {lines.length || ''}
+              </button>
+            </div>
+            {markTab === 'mark' && (
+              <button className="small" onClick={addMark}>
+                <Icon name="plus" size={14} />
+                지금 자리
+              </button>
+            )}
           </div>
-          {!marks.length && <p className="pad tiny" style={{ color: 'var(--rmuted)' }}>꽂은 책갈피가 없어요.</p>}
-          {marks.map((m) => (
+          {markTab === 'line' && !lines.length && <p className="pad tiny" style={{ color: 'var(--rmuted)' }}>글을 고르면 「밑줄」을 그을 수 있어요.</p>}
+          {markTab === 'mark' && !marks.some((m) => m.kind !== 'line') && <p className="pad tiny" style={{ color: 'var(--rmuted)' }}>꽂은 책갈피가 없어요.</p>}
+          {marks.filter((m) => (m.kind === 'line') === (markTab === 'line')).map((m) => (
             <div key={m.id} className="row" style={{ paddingRight: 8 }}>
               <button className="toc-item" onClick={() => jump({ n: m.node_id, o: m.pos })}>
-                <span>{m.quote || '책갈피'}</span>
+                <span>
+                  {m.kind === 'line' ? <span style={{ fontFamily: 'var(--serif)', fontSize: 13, borderLeft: '2px solid var(--mark-strong)', paddingLeft: 6, display: 'block' }}>{m.quote}</span> : m.quote || '책갈피'}
+                  {m.note && <span style={{ display: 'block', fontSize: 12.5, marginTop: 4 }}>{m.note}</span>}
+                </span>
               </button>
+              {m.kind === 'line' && (
+                <button
+                  className="icon-btn"
+                  aria-label="메모 고치기"
+                  onClick={async () => {
+                    const note = await promptBox('밑줄 메모', m.note, { multiline: true });
+                    if (note == null) return;
+                    await api(`bookmarks/${m.id}`, { method: 'PATCH', body: { note } }).catch(() => {});
+                    setMarks((x) => x.map((y) => (y.id === m.id ? { ...y, note } : y)));
+                  }}
+                >
+                  <Icon name="pen" size={14} />
+                </button>
+              )}
               <button
                 className="icon-btn"
                 aria-label="책갈피 빼기"
@@ -465,11 +576,22 @@ export function Reader({
         </div>
       )}
 
+      {selPop && (
+        <div className="sel-pop" style={{ left: selPop.x, top: selPop.y }}>
+          <button onMouseDown={(e) => e.preventDefault()} onClick={() => addLine(false)}>
+            밑줄
+          </button>
+          <button onMouseDown={(e) => e.preventDefault()} onClick={() => addLine(true)}>
+            메모와 함께
+          </button>
+        </div>
+      )}
       {mode === 'page' ? (
         <>
           <div
             className="r-stage"
             ref={stageRef}
+            onMouseUp={readSelection}
             onTouchStart={(e) => (touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
             onTouchEnd={(e) => {
               const t = touch.current;
@@ -477,6 +599,7 @@ export function Reader({
               if (!t) return;
               const dx = e.changedTouches[0].clientX - t.x;
               if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(e.changedTouches[0].clientY - t.y)) goPage(dx < 0 ? 1 : -1);
+              else readSelection();
             }}
           >
             <div className={`book ${n2 === 2 ? 'two' : 'one'} fade-in`} key={idx}>
@@ -524,7 +647,7 @@ export function Reader({
           <div className="r-measure prose" ref={measureRef} aria-hidden="true" />
         </>
       ) : (
-        <div className="r-scroll" ref={scrollRef} onClick={() => setPop('')}>
+        <div className="r-scroll" ref={scrollRef} onClick={() => setPop('')} onMouseUp={readSelection} onTouchEnd={readSelection}>
           <div className="col prose" />
         </div>
       )}

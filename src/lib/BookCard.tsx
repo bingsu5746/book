@@ -14,9 +14,9 @@ export function BookCard({ title, by, color, seed, meta, progress, href, onClick
             <i style={{ width: `${Math.min(100, progress * 100)}%` }} />
           </span>
         )}
-        {!!meta?.length && (
+        {!!meta?.filter(Boolean).length && (
           <span className="meta">
-            {meta.map((m, i) => (
+            {meta.filter(Boolean).map((m, i) => (
               <span key={i}>{m}</span>
             ))}
           </span>

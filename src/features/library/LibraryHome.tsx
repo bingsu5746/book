@@ -3,7 +3,9 @@ import { api } from '../../lib/api';
 import { BookCard, charsLabel, Cover } from '../../lib/BookCard';
 import { useSession } from '../../lib/session';
 import { splitMarkdown } from '../../lib/split';
-import { createBookFrom } from '../../lib/store';
+import { cacheMyBooks, cachedBooks, cachedKeys, createBookFrom } from '../../lib/store';
+import { useEffect } from 'react';
+import { idb } from '../../lib/idb';
 import { ago } from '../../lib/text';
 import type { Book } from '../../lib/types';
 import { confirmBox, Empty, Icon, Menu, Spinner, toast, useAsync } from '../../lib/ui';
@@ -34,7 +36,19 @@ export function LibraryHome() {
   const { user } = useSession();
   const [importing, setImporting] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [onDevice, setOnDevice] = useState<Set<string>>(new Set());
   const { data, loading, error, reload } = useAsync(async () => {
+    try {
+      await api('me');
+    } catch (e) {
+      if ((e as { status?: number }).status !== 0) throw e;
+      // 인터넷이 없으면 기기에 받아 둔 책으로
+      setOffline(true);
+      const cached = await cachedBooks();
+      return { books: cached.map((c) => ({ ...c.book, total_chars: c.nodes.reduce((s, n) => s + (n.deleted ? 0 : n.chars), 0), node_count: c.nodes.filter((n) => !n.deleted && n.kind !== 'part').length })), progress: {} as Record<string, { n: string; o: number; f?: number; at: number }>, shared: [] as Shared[] };
+    }
+    setOffline(false);
     const [b, p, c] = await Promise.all([
       api<{ books: Book[] }>('books'),
       api<{ progress: Record<string, { n: string; o: number; f?: number; at: number }> }>('progress').catch(() => ({ progress: {} as Record<string, { n: string; o: number; f?: number; at: number }> })),
@@ -43,9 +57,23 @@ export function LibraryHome() {
     return { books: b.books, progress: p.progress, shared: c.books.filter((x) => x.owner !== user.id) };
   }, []);
 
+  useEffect(() => {
+    if (!data || offline) {
+      void cachedKeys().then(setOnDevice);
+      return;
+    }
+    void (async () => {
+      await cacheMyBooks(data.books);
+      // 친구가 공유한 최신 판도 받아 둔다
+      const have = await cachedKeys();
+      for (const s of data.shared) if (!have.has(`e:${s.edition_id}`)) await api(`editions/${s.edition_id}`).then((r) => idb.set('books', `e:${s.edition_id}`, r)).catch(() => {});
+      setOnDevice(await cachedKeys());
+    })();
+  }, [data, offline]);
   if (loading && !data) return <Spinner />;
   if (error) return <div className="error-box">{error}</div>;
   const { books, progress, shared } = data!;
+  const dev = (id: string) => (onDevice.has(id) ? '기기에 있음' : '');
   const live = books.filter((b) => !b.deleted);
   const mine = live.filter((b) => b.kind === 'write');
   const read = live.filter((b) => b.kind === 'read');
@@ -69,6 +97,9 @@ export function LibraryHome() {
           <p className="sub">내가 쓴 책, 들인 책, 친구가 공유한 책을 한곳에서 읽어요.</p>
         </div>
         <div className="actions">
+          <a className="btn" href="#/lines">
+            밑줄 모음
+          </a>
           <a className="btn" href="#/discover">
             <Icon name="compass" size={16} />
             자유 이용 책 찾기
@@ -80,6 +111,7 @@ export function LibraryHome() {
         </div>
       </div>
 
+      {offline && <p className="note-box" style={{ marginBottom: 20 }}>인터넷에 연결되어 있지 않아 이 기기에 받아 둔 책만 보여요. 쓴 글은 기기에 저장했다가 연결되면 보내요.</p>}
       {cont && (
         <a className="hero" href={cont.href} style={{ textDecoration: 'none', color: 'inherit' }}>
           <Cover title={cont.title} color={cont.color} seed={cont.seed} />
@@ -115,7 +147,7 @@ export function LibraryHome() {
         {mine.length ? (
           <div className="cards">
             {mine.map((b) => (
-              <BookCard key={b.id} title={b.title} by={b.author} color={b.color} seed={b.id} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? `${b.last_edition}판 공유 중` : '']} />
+              <BookCard key={b.id} title={b.title} by={b.author} color={b.color} seed={b.id} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', dev(b.id)]} />
             ))}
           </div>
         ) : (
@@ -164,7 +196,7 @@ export function LibraryHome() {
         {shared.length ? (
           <div className="cards">
             {shared.map((s) => (
-              <BookCard key={s.id} title={s.title} by={s.owner_name} color={s.color} seed={s.id} href={`#/edition/${s.edition_id}`} progress={prog(`e:${s.id}`)?.f ?? null} meta={[`${s.edition}판`, charsLabel(s.chars), s.stars ? `★ ${s.stars.toFixed(1)}` : '']} />
+              <BookCard key={s.id} title={s.title} by={s.owner_name} color={s.color} seed={s.id} href={`#/edition/${s.edition_id}`} progress={prog(`e:${s.id}`)?.f ?? null} meta={[`${s.edition}판`, charsLabel(s.chars), s.stars ? `★ ${s.stars.toFixed(1)}` : '', dev(`e:${s.edition_id}`)]} />
             ))}
           </div>
         ) : (
@@ -181,7 +213,7 @@ export function LibraryHome() {
           <div className="cards">
             {read.map((b) => (
               <div key={b.id} style={{ position: 'relative' }}>
-                <BookCard title={b.title} by={b.author} color={b.color} seed={b.id} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), String(b.meta?.source ?? '').toUpperCase()]} />
+                <BookCard title={b.title} by={b.author} color={b.color} seed={b.id} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), String(b.meta?.source ?? '').toUpperCase(), dev(b.id)]} />
                 <div style={{ position: 'absolute', top: 6, right: 6 }}>
                   <Menu label="책 메뉴">
                     {(close) => (

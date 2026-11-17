@@ -18,6 +18,8 @@ import { WorldView } from './features/world/WorldView';
 import { Hall } from './features/community/Hall';
 import { EditionReader } from './features/community/EditionReader';
 import { Account } from './features/account/Account';
+import { LinesPage } from './features/library/LinesPage';
+import { QuickJump } from './features/QuickJump';
 
 const NAV = [
   { id: 'library', label: '서재', icon: 'library' },
@@ -35,10 +37,64 @@ function SaveBadge() {
   return null;
 }
 
+function UpdateBanner() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const on = () => setShow(true);
+    addEventListener('app-update', on);
+    return () => removeEventListener('app-update', on);
+  }, []);
+  if (!show) return null;
+  return (
+    <div className="update-banner" role="status">
+      새 버전이 나왔어요.
+      <button
+        className="small primary"
+        onClick={async () => {
+          const { flushDrafts } = await import('./lib/store');
+          await flushDrafts().catch(() => {});
+          location.reload();
+        }}
+      >
+        새로고침
+      </button>
+      <button className="small ghost" onClick={() => setShow(false)}>
+        나중에
+      </button>
+    </div>
+  );
+}
+
+/** 열람실 새 소식 수 (마지막으로 열람실을 연 뒤 다른 사람이 남긴 것) */
+function useHallBadge(user: User | null | undefined) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    if (!user) return;
+    if (!local.get<number>('hallSeen', 0)) local.set('hallSeen', Date.now());
+    const load = () =>
+      api<{ editions: { created: number; nickname: string }[]; notes: { created: number }[]; ratings: { updated: number }[] }>('feed')
+        .then((f) => {
+          const seen = local.get<number>('hallSeen', Date.now());
+          setN(f.notes.filter((x) => x.created > seen).length + f.ratings.filter((x) => x.updated > seen).length + f.editions.filter((x) => x.created > seen && x.nickname !== user.nickname).length);
+        })
+        .catch(() => {});
+    void load();
+    const t = setInterval(load, 5 * 60_000);
+    const seen = () => setN(0);
+    addEventListener('hall-seen', seen);
+    return () => {
+      clearInterval(t);
+      removeEventListener('hall-seen', seen);
+    };
+  }, [user]);
+  return n;
+}
+
 export function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined);
   const [invite, setInvite] = useState(true);
   const { parts, query } = useRoute();
+  const hallBadge = useHallBadge(user);
 
   useEffect(() => {
     setUnauthorizedHandler(() => setUser(null));
@@ -88,8 +144,9 @@ export function App() {
   else if (top === 'search') page = <SearchPage q={query.get('q') ?? ''} />;
   else if (top === 'discover') page = <Discover />;
   else if (top === 'account') page = <Account />;
+  else if (top === 'lines') page = <LinesPage />;
   else page = <LibraryHome />;
-  const navOn = top === 'discover' ? 'library' : top;
+  const navOn = top === 'discover' || top === 'lines' ? 'library' : top;
 
   return (
     <SessionCtx.Provider value={{ user, setUser }}>
@@ -104,8 +161,17 @@ export function App() {
               <a key={n.id} className={`nav-item${navOn === n.id ? ' on' : ''}`} href={`#/${n.id}`}>
                 <Icon name={n.icon} />
                 {n.label}
+                {n.id === 'hall' && hallBadge > 0 && (
+                  <em className="badge" style={{ marginLeft: 'auto' }}>
+                    {hallBadge}
+                  </em>
+                )}
               </a>
             ))}
+            <button className="nav-item" onClick={() => dispatchEvent(new Event('quick-jump'))}>
+              <Icon name="command" />
+              빠른 이동 <span className="faint tiny" style={{ marginLeft: 'auto' }}>{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</span>
+            </button>
             <div className="bottom">
               <SaveBadge />
               <a className={`nav-item${top === 'account' ? ' on' : ''}`} href="#/account">
@@ -121,7 +187,10 @@ export function App() {
           <nav className="tabbar" aria-label="메뉴">
             {NAV.slice(0, 4).map((n) => (
               <a key={n.id} className={navOn === n.id ? 'on' : ''} href={`#/${n.id}`}>
-                <Icon name={n.icon} size={20} />
+                <span style={{ position: 'relative' }}>
+                  <Icon name={n.icon} size={20} />
+                  {n.id === 'hall' && hallBadge > 0 && <i className="tab-dot" aria-label={`새 소식 ${hallBadge}`} />}
+                </span>
                 {n.label}
               </a>
             ))}
@@ -132,6 +201,8 @@ export function App() {
           </nav>
         </div>
       )}
+      <QuickJump />
+      <UpdateBanner />
       <Toaster />
     </SessionCtx.Provider>
   );

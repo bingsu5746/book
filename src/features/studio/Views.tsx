@@ -8,6 +8,7 @@ import { KIND_LABEL, STATUS_LABEL, type Book, type BookNode, type NodeKind, type
 import { confirmBox, Icon, promptBox, Spinner, toast, useAsync } from '../../lib/ui';
 import type { World } from '../../lib/world';
 import { Editor, type EntryRef } from './Editor';
+import { EditionDiff } from './EditionDiff';
 
 const STATUS_COLOR: Record<string, string> = { '': 'var(--line-strong)', idea: '#b9b2a3', draft: '#d9a441', revise: '#c26b4a', done: '#3f8a6c' };
 
@@ -296,7 +297,8 @@ export function BookNotes({ book, entries, onSave }: { book: Book; entries: Entr
 }
 
 // ---------------------------------------------------------------- 책 설정 · 공유
-export function BookSettings({ book, onPatch, onWorldLinked }: { book: Book; onPatch: (p: Record<string, unknown>) => void; onWorldLinked: (id: string | null) => void }) {
+export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Book; nodes: BookNode[]; onPatch: (p: Record<string, unknown>) => void; onWorldLinked: (id: string | null) => void }) {
+  const [cmp, setCmp] = useState<{ id: string; number: number } | null>(null);
   const worlds = useAsync(() => api<{ worlds: World[] }>('worlds'), []);
   const [editions, setEditions] = useState<{ id: string; number: number; note: string; created: number; chars: number }[] | null>(null);
   const [shared, setShared] = useState(!!book.shared);
@@ -432,17 +434,23 @@ export function BookSettings({ book, onPatch, onWorldLinked }: { book: Book; onP
         {!!editions?.length && (
           <div className="list">
             {editions.map((e) => (
-              <a key={e.id} className="list-item" href={`#/edition/${e.id}`}>
-                <b>{e.number}판</b>
+              <div key={e.id} className="list-item">
+                <a href={`#/edition/${e.id}`}>
+                  <b>{e.number}판</b>
+                </a>
                 <span className="grow muted small">{e.note}</span>
                 <span className="faint tiny">
                   {fmtDate(e.created)} · {fmtNum(e.chars)}자
                 </span>
-              </a>
+                <button className="small" onClick={() => setCmp({ id: e.id, number: e.number })}>
+                  지금과 비교
+                </button>
+              </div>
             ))}
           </div>
         )}
       </section>
+      {cmp && <EditionDiff editionId={cmp.id} number={cmp.number} nodes={nodes} onClose={() => setCmp(null)} />}
       <section className="panel stack">
         <h3 className="serif">책 종류</h3>
         <p className="muted small">지금: {book.kind === 'write' ? '내 원고' : '들인 책 (서재의 「들인 책」에 보이고 공유할 수 없어요)'}</p>

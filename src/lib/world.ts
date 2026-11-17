@@ -157,3 +157,21 @@ export function mentionedIn(text: string, entries: Entry[]): { entry: Entry; cou
   return out.sort((a, b) => b.count - a.count);
 }
 export const newItemId = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, '0')).join('');
+
+/** 줄마다 「이름 - 요약」 (또는 「이름: 요약」 · 「이름 | 다른 이름, 다른 이름 | 요약」) */
+export function parseBulk(text: string): { name: string; aliases: string[]; summary: string }[] {
+  const out: { name: string; aliases: string[]; summary: string }[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/^\s*([-*•·]|\d+[.)])\s+/, '').trim();
+    if (!line) continue;
+    if (line.includes('|')) {
+      const [n, a = '', s = ''] = line.split('|').map((x) => x.trim());
+      if (n) out.push({ name: n, aliases: a.split(',').map((x) => x.trim()).filter(Boolean), summary: s });
+      continue;
+    }
+    const m = line.match(/^(.+?)\s*(?:\s[-–—]\s|:\s?)\s*(.*)$/);
+    out.push(m ? { name: m[1].trim(), aliases: [], summary: m[2].trim() } : { name: line, aliases: [], summary: '' });
+  }
+  return out.filter((x) => x.name);
+}
+

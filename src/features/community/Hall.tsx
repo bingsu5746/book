@@ -1,5 +1,6 @@
 // 열람실: 친구와 서로 공유한 책 · 새 소식(새 판 · 내 책에 달린 주석 · 평가)
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { local } from '../../lib/idb';
 import { api } from '../../lib/api';
 import { BookCard, charsLabel } from '../../lib/BookCard';
 import { useSession } from '../../lib/session';
@@ -32,6 +33,10 @@ interface Feed {
 export function Hall() {
   const { user } = useSession();
   const [tab, setTab] = useState<'books' | 'news'>('books');
+  useEffect(() => {
+    local.set('hallSeen', Date.now());
+    dispatchEvent(new Event('hall-seen'));
+  }, []);
   const { data, loading, error } = useAsync(async () => {
     const [c, f] = await Promise.all([api<{ books: Shared[] }>('community'), api<Feed>('feed')]);
     return { books: c.books, feed: f };

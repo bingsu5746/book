@@ -37,6 +37,8 @@ const P: Record<string, string> = {
   timer: 'M12 8v5l3 2M9 2h6M12 22a9 9 0 100-18 9 9 0 000 18z',
   layers: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5',
   sun: 'M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+  sound: 'M4 9v6h4l5 4V5L8 9zM16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12',
+  command: 'M9 6a3 3 0 10-3 3h12a3 3 0 10-3-3v12a3 3 0 103-3H6a3 3 0 103 3z',
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 9a3 3 0 100 6 3 3 0 000-6z',
 };
 export function Icon({ name, size = 18 }: { name: keyof typeof P | string; size?: number }) {

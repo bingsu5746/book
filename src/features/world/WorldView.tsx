@@ -7,7 +7,7 @@ import { renderMd } from '../../lib/md';
 import { go } from '../../lib/router';
 import { fmtNum } from '../../lib/text';
 import { confirmBox, Empty, Icon, Modal, promptBox, Spinner, SubNav, toast } from '../../lib/ui';
-import { DEFAULT_FIELDS, deleteItems, entriesOf, fieldsFor, KINDS, kindLabel, loadWorld, newItemId, REL_CATS, relColor, saveItems, type Entry, type EntryKind, type RelCat, type Relation, type Template, type Track, type WEvent, type WItem, type WorldData } from '../../lib/world';
+import { DEFAULT_FIELDS, deleteItems, entriesOf, fieldsFor, KINDS, kindLabel, loadWorld, newItemId, REL_CATS, relColor, saveItems, type Entry, type EntryKind, type RelCat, type Relation, type Template, type Track, type WEvent, type WItem, type WorldData, parseBulk } from '../../lib/world';
 import { shrinkImage } from '../../lib/image';
 import { WorldMaps } from './WorldMaps';
 
@@ -151,7 +151,52 @@ function MissingLinks({ worldId, entries, onCreate }: { worldId: string; entries
   );
 }
 
+function BulkAdd({ entries, onDone, onClose }: { entries: Entry[]; onDone: (es: Entry[]) => void; onClose: () => void }) {
+  const [kind, setKind] = useState<EntryKind>('character');
+  const [text, setText] = useState('');
+  const parsed = parseBulk(text);
+  const have = new Set(entries.map((e) => e.name));
+  const fresh = parsed.filter((p) => !have.has(p.name));
+  return (
+    <Modal
+      title="항목 한꺼번에 넣기"
+      onClose={onClose}
+      foot={
+        <>
+          <button onClick={onClose}>그만두기</button>
+          <button
+            className="primary"
+            disabled={!fresh.length}
+            onClick={() => {
+              onDone(fresh.map((p) => ({ id: newItemId(), type: 'entry', kind, name: p.name, aliases: p.aliases, summary: p.summary, body: '', fields: {}, tags: [], color: '' })));
+              onClose();
+            }}
+          >
+            {fresh.length}개 만들기
+          </button>
+        </>
+      }
+    >
+      <p className="muted small">한 줄에 하나씩: 「이름 - 한 줄 요약」 또는 「이름 | 다른 이름, 다른 이름 | 요약」. 작품 노트에서 인물 목록을 그대로 붙여 넣어도 돼요.</p>
+      <select className="input" value={kind} onChange={(e) => setKind(e.target.value as EntryKind)} aria-label="종류">
+        {KINDS.map((k) => (
+          <option key={k.id} value={k.id}>
+            {k.label}
+          </option>
+        ))}
+      </select>
+      <textarea className="input" rows={8} placeholder={'홍설 - 꿈속 꽃밭을 오가는 주인공\n지우 | 지우야 | 홍설의 친구'} value={text} onChange={(e) => setText(e.target.value)} />
+      {!!parsed.length && (
+        <p className="faint tiny">
+          {fresh.length}개를 새로 만들어요{parsed.length > fresh.length ? ` (이미 있는 ${parsed.length - fresh.length}개는 빼요)` : ''}: {fresh.map((p) => p.name).join(', ')}
+        </p>
+      )}
+    </Modal>
+  );
+}
+
 function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boolean; worldId: string; onCreate: (e: Entry, stay?: boolean) => void }) {
+  const [bulk, setBulk] = useState(false);
   const [kind, setKind] = useState<EntryKind | ''>('');
   const [tag, setTag] = useState('');
   const [q, setQ] = useState('');
@@ -180,7 +225,9 @@ function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boole
             ))}
           </select>
         )}
+        {!ro && <button onClick={() => setBulk(true)}>여러 개 한꺼번에</button>}
       </div>
+      {bulk && <BulkAdd entries={entries} onClose={() => setBulk(false)} onDone={(es) => es.forEach((e) => onCreate(e, true))} />}
       <div className="row wrap">
         <button className={`chip${!kind ? ' on' : ''}`} onClick={() => setKind('')}>
           전체 {entries.length}

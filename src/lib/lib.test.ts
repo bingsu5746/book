@@ -90,3 +90,18 @@ describe('책 전체 찾아 바꾸기', () => {
     expect(findAll('x', '(', { regex: true, ignoreCase: false })).toEqual([]);
   });
 });
+
+import { parseBulk } from './world';
+describe('세계관 항목 한꺼번에 넣기', () => {
+  it('여러 모양의 줄을 읽는다', () => {
+    expect(parseBulk('- 홍설 - 꿈속 주인공\n지우: 친구\n2. 엄마\n엄마 | 어머니, 엄마 | 홍설의 엄마\n\n')).toEqual([
+      { name: '홍설', aliases: [], summary: '꿈속 주인공' },
+      { name: '지우', aliases: [], summary: '친구' },
+      { name: '엄마', aliases: [], summary: '' },
+      { name: '엄마', aliases: ['어머니', '엄마'], summary: '홍설의 엄마' },
+    ]);
+  });
+  it('이름 속 붙임표는 나누지 않는다', () => {
+    expect(parseBulk('X-23 - 실험체')).toEqual([{ name: 'X-23', aliases: [], summary: '실험체' }]);
+  });
+});

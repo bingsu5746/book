@@ -156,3 +156,28 @@ export async function createBookFrom(input: { title: string; author?: string; ki
   await uploadNodes(book.id, input.nodes, onProgress);
   return book;
 }
+
+/** 내 책을 기기에 받아 두기: 서버에서 바뀐 책만 다시 받는다 (인터넷 없이 읽으려고) */
+export async function cacheMyBooks(books: Book[], onDone?: () => void) {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+  for (const b of books) {
+    if (b.deleted) continue;
+    const c = await idb.get<FullBook>('books', b.id);
+    if (c && c.book.updated >= b.updated) continue;
+    await loadFull(b.id).catch(() => {});
+  }
+  onDone?.();
+}
+/** 기기에 받아 둔 책 (인터넷이 없을 때 서재 목록으로) */
+export async function cachedBooks(): Promise<FullBook[]> {
+  const out: FullBook[] = [];
+  for (const k of await idb.keys('books')) {
+    if (k.startsWith('e:')) continue;
+    const v = await idb.get<FullBook>('books', k);
+    if (v?.book) out.push(v);
+  }
+  return out;
+}
+export async function cachedKeys(): Promise<Set<string>> {
+  return new Set(await idb.keys('books'));
+}

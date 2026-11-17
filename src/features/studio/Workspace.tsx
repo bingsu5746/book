@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { download, toHtml, toMarkdown, toText } from '../../lib/exporters';
+import { makeEpub } from '../../lib/epub';
 import { local } from '../../lib/idb';
 import { go } from '../../lib/router';
 import { flatten, loadFull, onSaveState, saveBody, toReadNodes, type FullBook } from '../../lib/store';
@@ -317,6 +318,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                 <button onClick={() => (close(), setSprint(null))}>집중 쓰기 그만두기</button>
               )}
               <hr />
+              <button onClick={() => (close(), download(`${book.title}.epub`, new Blob([makeEpub(book, readNodes()) as BlobPart], { type: 'application/epub+zip' })))}>전자책(EPUB)으로 내보내기</button>
               <button onClick={() => (close(), download(`${book.title}.md`, toMarkdown(book.title, book.author, readNodes()), 'text/markdown;charset=utf-8'))}>마크다운(.md)으로 내보내기</button>
               <button onClick={() => (close(), download(`${book.title}.txt`, toText(book.title, book.author, readNodes())))}>글(.txt)로 내보내기</button>
               <button onClick={() => (close(), download(`${book.title}.html`, toHtml(book.title, book.author, readNodes()), 'text/html;charset=utf-8'))}>인쇄용 HTML 로 내보내기</button>
@@ -475,6 +477,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         {view === 'settings' && (
           <BookSettings
             book={book}
+            nodes={live}
             onPatch={patchBook}
             onWorldLinked={(w) => {
               setData((d) => (d ? { ...d, book: { ...d.book, world_id: w } } : d));

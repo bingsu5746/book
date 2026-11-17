@@ -2456,3 +2456,36 @@ a.list-item:hover {
   border-color: var(--line-strong);
   background: var(--surface);
 }
+
+.prose mark.line {
+  background: transparent;
+  border-bottom: 2px solid var(--mark-strong);
+  border-radius: 0;
+  cursor: default;
+}
+
+.update-banner {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 10px 8px 16px;
+  box-shadow: 0 12px 30px -12px var(--shade);
+  font-size: 14px;
+}
+.tab-dot {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}

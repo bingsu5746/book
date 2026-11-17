@@ -171,6 +171,12 @@ export class Library extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS images (id TEXT PRIMARY KEY, world_id TEXT NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, size INTEGER NOT NULL, created INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS images_world ON images (world_id);
     `);
+    // 책갈피 종류: mark(책갈피) · line(밑줄). 예전 표에는 칸이 없다
+    try {
+      this.sql.exec("ALTER TABLE bookmarks ADD COLUMN kind TEXT NOT NULL DEFAULT 'mark'");
+    } catch {
+      /* 이미 있음 */
+    }
   }
 
   private rows<T extends Row = Row>(q: string, ...args: SqlStorageValue[]): T[] {
@@ -307,8 +313,12 @@ export class Library extends DurableObject<Env> {
     if (path === 'bookmarks' && method === 'GET') return json({ bookmarks: this.rows('SELECT * FROM bookmarks WHERE user_id = ? ORDER BY at DESC', user.id) });
     if (path === 'bookmarks' && method === 'POST') {
       const id = newId();
-      this.sql.exec('INSERT INTO bookmarks (id, user_id, key, node_id, pos, quote, note, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, user.id, str(b.key, 40), str(b.node_id, 40), Math.max(0, Math.floor(num(b.pos))), str(b.quote, 200), str(b.note, 500), Date.now());
+      this.sql.exec('INSERT INTO bookmarks (id, user_id, key, node_id, pos, quote, note, at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.id, str(b.key, 40), str(b.node_id, 40), Math.max(0, Math.floor(num(b.pos))), str(b.quote, 1000), str(b.note, 2000), Date.now(), b.kind === 'line' ? 'line' : 'mark');
       return json({ id });
+    }
+    if ((r = m(/^bookmarks\/([a-z0-9]+)$/)) && method === 'PATCH') {
+      this.sql.exec('UPDATE bookmarks SET note = ? WHERE id = ? AND user_id = ?', str(b.note, 2000), r[1], user.id);
+      return json({ ok: true });
     }
     if ((r = m(/^bookmarks\/([a-z0-9]+)$/)) && method === 'DELETE') {
       this.sql.exec('DELETE FROM bookmarks WHERE id = ? AND user_id = ?', r[1], user.id);

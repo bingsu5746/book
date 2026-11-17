@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { findAnchor, highlightRange, makeAnchor, rangeOffsets, type Anchor } from '../../lib/anchor';
-import { local } from '../../lib/idb';
+import { idb, local } from '../../lib/idb';
 import { renderMd } from '../../lib/md';
 import { go } from '../../lib/router';
 import { useSession } from '../../lib/session';
@@ -56,8 +56,17 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
   const load = useCallback(
     () =>
       api<EditionData>(`editions/${editionId}`)
-        .then(setD)
-        .catch((e) => setErr((e as Error).message)),
+        .then((r) => {
+          setD(r);
+          void idb.set('books', `e:${editionId}`, r);
+        })
+        .catch(async (e) => {
+          const cached = await idb.get<EditionData>('books', `e:${editionId}`);
+          if (cached) {
+            setD(cached);
+            toast('인터넷이 없어 기기에 받아 둔 판을 열었어요');
+          } else setErr((e as Error).message);
+        }),
     [editionId],
   );
   useEffect(() => {
