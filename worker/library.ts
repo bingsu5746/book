@@ -17,6 +17,7 @@ import { flattenTree, snippets } from './util';
 import { cleanSynopsis, FALLBACK, infoMessages, INFO_MARK, MODEL, modelInput, parseInfo, readOutput, synopsisMessages } from './ai';
 import { askGemini, GeminiDayLimit, geminiKey, geminiModels, pacificDay, type Msg } from './gemini';
 import { relayFetch } from './relay';
+import { cleanRecap, conflictMessages, dialogueMessages, fakeTool, findDialogue, markDialogue, namesMessages, parseEdits, parseIssues, parseNames, parseQuestions, parseSpeakers, polishMessages, previousDigest, questionMessages, readJson, recapMessages, TOOLS, type ToolName } from './tools';
 import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, SECTIONS, sectionMessages, type ChapterNote } from './analysis';
 /** 한 사람이 하루에 시작할 수 있는 분석집 수 */
 const ANALYSIS_DAILY = 5;
@@ -291,6 +292,8 @@ export class Library extends DurableObject<Env> {
     }
     if (path === 'ai/synopsis' && method === 'POST') return this.aiSynopsis(user, b);
     if (path === 'ai/chapter-info' && method === 'POST') return this.aiChapterInfo(user, b);
+    if (path === 'ai/tool' && method === 'POST') return this.aiTool(user, b);
+    if (path === 'ai/recap' && method === 'POST') return this.aiRecap(user, b);
     if (path === 'ai/status' && method === 'GET') {
       const day = pacificDay(Date.now());
       return json({ gemini: !!geminiKey(this.env), cloudflare: !!this.env.AI, geminiOut: this.rows('SELECT model FROM gem_out WHERE day = ?', day).map((r) => r.model), lastVia: this.lastVia });
@@ -1083,6 +1086,85 @@ export class Library extends DurableObject<Env> {
     return json({ info, left: AI_DAILY - used - 1 });
   }
 
+  /** 오늘 AI 를 더 부를 수 있는지. 안 되면 오류 응답 */
+  private aiGate(user: UserRow): { used: number; day: string } | Response {
+    if (!this.env.AI && !geminiKey(this.env) && this.env.FAKE_AI !== '1') return fail('AI 를 쓸 수 없어요. (서버에 AI 연결이 없음)', 503);
+    const day = new Date().toISOString().slice(0, 10);
+    const used = Number(this.one('SELECT n FROM ai_usage WHERE user_id = ? AND day = ?', user.id, day)?.n ?? 0);
+    if (used >= AI_DAILY) return fail(`오늘 AI 를 ${AI_DAILY}번 다 썼어요. 내일 다시 해 주세요.`, 429);
+    return { used, day };
+  }
+  private aiCount(user: UserRow, day: string) {
+    this.sql.exec('INSERT INTO ai_usage (user_id, day, n) VALUES (?, ?, 1) ON CONFLICT (user_id, day) DO UPDATE SET n = n + 1', user.id, day);
+  }
+  /** 이 장보다 앞에 있는 장들 (부 · 메모 · 빈 장 빼고) */
+  private unitsBefore(n: NodeRow): { title: string; synopsis: string; body: string }[] {
+    const all = flattenTree(this.rows<NodeRow>('SELECT id, parent_id, sort, kind, title, synopsis, body FROM nodes WHERE book_id = ? AND deleted IS NULL', n.book_id));
+    const at = all.findIndex((x) => x.id === n.id);
+    return all
+      .slice(0, Math.max(0, at))
+      .filter((x) => x.kind !== 'part' && x.kind !== 'note' && (String(x.synopsis ?? '').trim() || String(x.body ?? '').replace(/\s/g, '').length >= 50))
+      .map((x) => ({ title: String(x.title ?? ''), synopsis: String(x.synopsis ?? ''), body: String(x.body ?? '') }));
+  }
+
+  /** 집필을 돕는 AI 도구 (한 장 기준). 저장은 하지 않고 결과만 돌려준다 */
+  private async aiTool(user: UserRow, b: Body) {
+    const tool = String(b.tool ?? '') as ToolName;
+    if (!TOOLS.includes(tool)) return fail('모르는 도구예요.');
+    const n = this.ownNode(user, String(b.node_id ?? ''));
+    const body = String(n.body ?? '');
+    const plain = body.replace(/%%[\s\S]*?%%/g, '').replace(/\s/g, '');
+    if (tool === 'polish') {
+      if (str(b.text, 5000).replace(/\s/g, '').length < 10) return fail('고칠 문단을 골라 주세요.');
+    } else if (tool !== 'questions' && plain.length < 80) return fail('글이 너무 짧아요.');
+    const gate = this.aiGate(user);
+    if (gate instanceof Response) return gate;
+    const names = (v: unknown, max = 300) => (Array.isArray(v) ? v.map((x) => str(x, 40).trim()).filter(Boolean).slice(0, max) : []);
+    let lines: ReturnType<typeof findDialogue> = [];
+    let msgs: Msg[];
+    if (tool === 'conflicts') msgs = conflictMessages(n.title, body, str(b.world, 9000), previousDigest(this.unitsBefore(n)));
+    else if (tool === 'names') msgs = namesMessages(body, names(b.known));
+    else if (tool === 'polish') msgs = polishMessages(str(b.text, 4000));
+    else if (tool === 'questions') msgs = questionMessages(n.title, String(n.synopsis ?? ''), previousDigest(this.unitsBefore(n), 5000), body);
+    else {
+      lines = findDialogue(body);
+      if (lines.length < 2) return fail('따옴표(“ ” 「 」)로 묶인 대사가 거의 없어요.');
+      msgs = dialogueMessages(markDialogue(body, lines), names(b.people, 80));
+    }
+    let o: Record<string, unknown> | null = null;
+    try {
+      o = readJson(await this.callAI(msgs, tool === 'dialogue' ? 2500 : 1800));
+    } catch (e) {
+      console.error('ai tool', tool, e instanceof Error ? e.message : String(e));
+      return fail('AI 가 답하지 않았어요. 잠시 뒤 다시 해 주세요.', 502);
+    }
+    if (!o) return fail('AI 답을 읽지 못했어요. 다시 해 주세요.', 502);
+    this.aiCount(user, gate.day);
+    const left = AI_DAILY - gate.used - 1;
+    if (tool === 'conflicts') return json({ issues: parseIssues(o), left });
+    if (tool === 'names') return json({ names: parseNames(o), left });
+    if (tool === 'polish') return json({ edits: parseEdits(o), left });
+    if (tool === 'questions') return json({ questions: parseQuestions(o), left });
+    return json({ lines: parseSpeakers(o, lines), left });
+  }
+
+  /** 지난 이야기: 읽은 데까지의 글(쓰는 쪽이 잘라서 보냄)만으로 요약 */
+  private async aiRecap(user: UserRow, b: Body) {
+    const material = str(b.material, 20000);
+    if (material.replace(/\s/g, '').length < 100) return fail('아직 읽은 글이 적어서 정리할 게 없어요.');
+    const gate = this.aiGate(user);
+    if (gate instanceof Response) return gate;
+    let text = '';
+    try {
+      text = cleanRecap(await this.callAI(recapMessages(str(b.title, 200), material), 1500));
+    } catch (e) {
+      console.error('ai recap', e instanceof Error ? e.message : String(e));
+    }
+    if (!text) return fail('AI 가 지난 이야기를 만들지 못했어요. 잠시 뒤 다시 해 주세요.', 502);
+    this.aiCount(user, gate.day);
+    return json({ recap: text, left: AI_DAILY - gate.used - 1 });
+  }
+
   // ---------------------------------------------------------------- 분석집 (작품 해설)
   private autoAnalysisOn(user: UserRow): boolean {
     const p = parseJson(this.one('SELECT data FROM prefs WHERE user_id = ?', user.id)?.data) as { autoAnalysis?: boolean };
@@ -1149,6 +1231,8 @@ export class Library extends DurableObject<Env> {
     if (this.env.FAKE_AI === '1') {
       // 개발용 (wrangler dev 에서는 Workers AI 를 부를 수 없다): 모양만 맞는 가짜 답
       const sys = String((messages[0] as { content?: string })?.content ?? '');
+      const fake = fakeTool(sys, String((messages[1] as { content?: string })?.content ?? ''));
+      if (fake) return fake;
       if (sys.includes(INFO_MARK)) return JSON.stringify({ synopsis: '가짜 요약: 이 장에서 일이 일어난다.', pov: '홍설', place: '파빌리온', time: '오전 8시', tags: ['꿈', '시작'] });
       const isChapter = sys.includes('메모를 남긴다');
       return isChapter ? JSON.stringify({ summary: '가짜 요약: 이 장에서 일이 일어난다.', characters: [{ name: '홍설', doing: '꽃밭에 간다', traits: ['조용함'] }], events: [{ what: '꽃밭에 감', why: '시작' }], objects: [{ name: '거울', meaning: '기억' }], places: [{ name: '파빌리온', meaning: '쉼' }], motifs: ['오전 8시'], lines: ['홍설은 꽃밭에서 눈을 떴다.'] }) : '가짜 해설 문단입니다. [1] 장을 근거로 씁니다.';

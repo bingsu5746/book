@@ -10,8 +10,9 @@ import { confirmBox, Icon, Modal, promptBox, Spinner, toast } from '../../lib/ui
 import { entriesOf, fieldsFor, kindLabel, mentionedIn, type Entry, type WEvent, type WItem } from '../../lib/world';
 import type { EditorHandle } from './Editor';
 import { infoGaps } from '../../lib/fillinfo';
+import { AiTools } from './AiTools';
 
-export type SideTab = 'info' | 'world' | 'spell' | 'history' | 'revise' | 'notes';
+export type SideTab = 'info' | 'world' | 'spell' | 'history' | 'revise' | 'ai' | 'notes';
 const LABELS = ['', '#c26b4a', '#d9a441', '#3f8a6c', '#4f6fa8', '#8a5ca8', '#77736b'];
 
 export function SidePanel({
@@ -28,6 +29,8 @@ export function SidePanel({
   onOpenWorld,
   summarize,
   fillInfo,
+  prepareAi,
+  onAddEntries,
 }: {
   tab: SideTab;
   setTab: (t: SideTab) => void;
@@ -42,6 +45,8 @@ export function SidePanel({
   onOpenWorld: () => void;
   summarize: (n: BookNode) => Promise<string>;
   fillInfo: (n: BookNode) => Promise<string[]>;
+  prepareAi: () => Promise<void>;
+  onAddEntries: (e: Entry[]) => Promise<void>;
 }) {
   return (
     <aside className="side" aria-label="곁 패널">
@@ -53,6 +58,7 @@ export function SidePanel({
             ['spell', '맞춤법'],
             ['history', '기록'],
             ['revise', '퇴고'],
+            ['ai', 'AI 도움'],
             ['notes', '친구 주석'],
           ] as const
         ).map(([k, l]) => (
@@ -68,6 +74,7 @@ export function SidePanel({
         {node && tab === 'spell' && <SpellPanel key={node.id} bookId={bookId} body={body} editor={editor} />}
         {node && tab === 'history' && <History node={node} body={body} onRestore={onRestore} />}
         {node && tab === 'revise' && <Revise body={body} editor={editor} />}
+        {node && tab === 'ai' && <AiTools node={node} body={body} items={items} worldId={worldId} editor={editor} prepare={prepareAi} onAddEntries={onAddEntries} />}
         {node && tab === 'notes' && <FriendNotes bookId={bookId} node={node} body={body} editor={editor} />}
       </div>
     </aside>

@@ -5,7 +5,7 @@ import { download, toHtml, toMarkdown, toText } from '../../lib/exporters';
 import { makeEpub } from '../../lib/epub';
 import { local } from '../../lib/idb';
 import { go } from '../../lib/router';
-import { flatten, loadFull, onSaveState, saveBody, toReadNodes, type FullBook } from '../../lib/store';
+import { flatten, loadFull, onSaveState, pushDraft, saveBody, toReadNodes, type FullBook } from '../../lib/store';
 import { charsNoSpace, charsWithSpace, fmtNum, manuscriptPages, plain } from '../../lib/text';
 import { KIND_LABEL, type BookNode, type NodeKind } from '../../lib/types';
 import { confirmBox, Icon, Menu, Modal, promptBox, Spinner, toast } from '../../lib/ui';
@@ -737,6 +737,24 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
           onOpenWorld={() => setView('settings')}
           summarize={summarize}
           fillInfo={fillInfo}
+          prepareAi={async () => {
+            if (!sel) return;
+            // 기다리던 저장을 바로 보내고, 보내는 중인 것은 끝나기를 기다린다 (서버는 저장된 원고를 읽는다)
+            const id = sel.id;
+            const waiting = timers.current.has(id);
+            clearTimeout(timers.current.get(id));
+            timers.current.delete(id);
+            const r = waiting ? await saveBody(id, bookId, body, revs.current.get(id) ?? sel.rev) : await pushDraft(id);
+            if (r) {
+              revs.current.set(id, r.rev);
+              updateNode(id, { rev: r.rev, updated: Date.now() });
+            }
+          }}
+          onAddEntries={async (es) => {
+            if (!book.world_id) throw new Error('먼저 책 설정에서 세계관을 연결해 주세요.');
+            await saveItems(book.world_id, es);
+            setItems((x) => [...x, ...es]);
+          }}
         />
       )}
     </div>

@@ -1,11 +1,15 @@
 // 리더: 쪽 넘김(넓으면 두 쪽 펼침) 또는 세로 스크롤. 글자 크기 · 줄 간격 · 글꼴 · 바탕은 기기마다 기억한다.
 // 읽던 자리는 (장 id, 장 안 글자 위치)로 저장해서 화면 크기가 달라도 같은 곳이 열린다.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { recapMaterial } from '../../lib/aitools';
 import { api } from '../../lib/api';
 import { local } from '../../lib/idb';
 import { buildBlocks, pageOf, paginate, type Page, type TocEntry } from '../../lib/paginate';
 import type { ReadNode } from '../../lib/types';
-import { Icon, promptBox, toast } from '../../lib/ui';
+import { Icon, promptBox, Spinner, toast } from '../../lib/ui';
+
+/** 이만큼 지나서 다시 펴면 「지난 이야기」를 먼저 권한다 */
+const RECAP_AFTER = 3 * 86_400_000;
 import { highlightRange, rangeOffsets } from '../../lib/anchor';
 import { speak, speakSupported, stopSpeaking } from '../studio/StudioTools';
 import type { EntryRef } from '../studio/Editor';
@@ -89,7 +93,7 @@ export function Reader({
       return v;
     });
   const mode = forceMode ?? prefs.mode;
-  const [pop, setPop] = useState<'' | 'toc' | 'set' | 'marks' | 'find' | 'more'>(initialFind ? 'find' : '');
+  const [pop, setPop] = useState<'' | 'toc' | 'set' | 'marks' | 'find' | 'more' | 'recap'>(initialFind ? 'find' : '');
   const [chrome, setChrome] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -168,6 +172,40 @@ export function Reader({
     }
   };
 
+  // 지난 이야기 (AI): 읽은 데까지만 보내 요약한다. 오랜만에 이어 읽을 때 먼저 권한다
+  const [lastAt, setLastAt] = useState(0);
+  const [recap, setRecap] = useState<{ text: string; busy: boolean; err: string }>({ text: '', busy: false, err: '' });
+  const [offerRecap, setOfferRecap] = useState(false);
+  const startedFar = () => {
+    const s = spot.current;
+    return !!s && (order.indexOf(s.n) > 0 || s.o > 2000);
+  };
+  useEffect(() => {
+    if (lastAt && Date.now() - lastAt > RECAP_AFTER && startedFar()) setOfferRecap(true);
+  }, [lastAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showRecap = async () => {
+    setOfferRecap(false);
+    setPop('recap');
+    const s = spot.current ?? { n: order[0], o: 0 };
+    const cacheKey = `recap:${progressKey ?? title}`;
+    const cached = local.get<{ n: string; o: number; text: string } | null>(cacheKey, null);
+    if (cached && cached.n === s.n && Math.abs(cached.o - s.o) < 1500) return setRecap({ text: cached.text, busy: false, err: '' });
+    const material = recapMaterial(
+      blocks.map((b) => ({ n: b.dataset.n ?? '', o: Number(b.dataset.o ?? 0), text: b.textContent ?? '', head: b.dataset.toc !== undefined })),
+      order,
+      s,
+    );
+    if (material.replace(/\s/g, '').length < 100) return setRecap({ text: '', busy: false, err: '아직 읽은 글이 적어서 정리할 게 없어요.' });
+    setRecap({ text: '', busy: true, err: '' });
+    try {
+      const r = await api<{ recap: string }>('ai/recap', { body: { title, material } });
+      local.set(cacheKey, { n: s.n, o: s.o, text: r.recap });
+      setRecap({ text: r.recap, busy: false, err: '' });
+    } catch (e) {
+      setRecap({ text: '', busy: false, err: (e as Error).message });
+    }
+  };
+
   // 저장된 읽던 자리 (서버 → 없으면 기기)
   const [ready, setReady] = useState(!!start || !progressKey);
   useEffect(() => {
@@ -177,8 +215,12 @@ export function Reader({
       .then((r) => {
         const s = r.progress[progressKey];
         spot.current = s && (!localSpot || s.at >= localSpot.at) ? s : localSpot;
+        setLastAt((spot.current as { at?: number } | null)?.at ?? 0);
       })
-      .catch(() => (spot.current = localSpot))
+      .catch(() => {
+        spot.current = localSpot;
+        setLastAt(localSpot?.at ?? 0);
+      })
       .finally(() => setReady(true));
     api<{ bookmarks: Bookmark[] }>('bookmarks')
       .then((r) => setMarks(r.bookmarks.filter((b) => b.key === progressKey)))
@@ -632,6 +674,12 @@ export function Reader({
               </span>
             </button>
           )}
+          <button className="toc-item" role="menuitem" onClick={() => void showRecap()}>
+            <span className="row">
+              <Icon name="history" size={16} />
+              지난 이야기 (AI)
+            </span>
+          </button>
           {speakSupported() && (
             <button className="toc-item" role="menuitem" onClick={() => (setPop(''), speakNow())}>
               <span className="row">
@@ -878,6 +926,38 @@ export function Reader({
         </div>
       )}
 
+      {pop === 'recap' && (
+        <div className="r-pop r-recap" role="dialog" aria-label="지난 이야기">
+          <h3>지난 이야기</h3>
+          <div className="pad">
+            {recap.busy && <Spinner label="읽은 데까지 정리하는 중" />}
+            {recap.err && <p className="small">{recap.err}</p>}
+            {recap.text && (
+              <>
+                {recap.text.split('\n\n').map((p, i) => (
+                  <p key={i} className="recap-p">
+                    {p}
+                  </p>
+                ))}
+                <p className="tiny" style={{ color: 'var(--rmuted)', marginTop: 8 }}>
+                  마지막으로 읽은 곳 앞까지만 AI 가 정리했어요. 뒤 내용은 넣지 않았어요.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {offerRecap && pop === '' && (
+        <div className="r-offer" role="status">
+          <span>오랜만이에요. 지난 이야기를 볼까요?</span>
+          <button className="small" onClick={() => void showRecap()}>
+            보기
+          </button>
+          <button className="icon-btn" aria-label="닫기" onClick={() => setOfferRecap(false)}>
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
       {wl && (
         <div className="wl-pop" style={{ left: Math.min(Math.max(wl.x, 150), innerWidth - 150), top: wl.y + 8 }} role="dialog" aria-label={wl.name}>
           <b>{wl.e?.name ?? wl.name}</b>
