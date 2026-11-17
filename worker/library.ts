@@ -15,6 +15,8 @@ import { charsNoSpace, cutText, inviteOk, Limiter, passwordProblem, readCookie, 
 import { gutenbergFile, gutenbergSearch, wikisourcePage, wikisourceSearch } from './external';
 import { flattenTree, snippets } from './util';
 import { cleanSynopsis, FALLBACK, infoMessages, INFO_MARK, MODEL, modelInput, parseInfo, readOutput, synopsisMessages } from './ai';
+import { askGemini, GeminiDayLimit, geminiKey, geminiModels, pacificDay, type Msg } from './gemini';
+import { relayFetch } from './relay';
 import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, SECTIONS, sectionMessages, type ChapterNote } from './analysis';
 /** 한 사람이 하루에 시작할 수 있는 분석집 수 */
 const ANALYSIS_DAILY = 5;
@@ -183,6 +185,7 @@ export class Library extends DurableObject<Env> {
         total INTEGER NOT NULL, state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL, next_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS analysis_jobs_book ON analysis_jobs (book_id);
       CREATE TABLE IF NOT EXISTS ai_usage (user_id TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (user_id, day));
+      CREATE TABLE IF NOT EXISTS gem_out (model TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (model, day));
       CREATE TABLE IF NOT EXISTS jots (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS jots_user ON jots (user_id);
     `);
@@ -288,6 +291,10 @@ export class Library extends DurableObject<Env> {
     }
     if (path === 'ai/synopsis' && method === 'POST') return this.aiSynopsis(user, b);
     if (path === 'ai/chapter-info' && method === 'POST') return this.aiChapterInfo(user, b);
+    if (path === 'ai/status' && method === 'GET') {
+      const day = pacificDay(Date.now());
+      return json({ gemini: !!geminiKey(this.env), cloudflare: !!this.env.AI, geminiOut: this.rows('SELECT model FROM gem_out WHERE day = ?', day).map((r) => r.model), lastVia: this.lastVia });
+    }
     // 아이디어 수첩
     if (path === 'jots' && method === 'GET') return json({ jots: this.rows('SELECT id, text, done, created, updated FROM jots WHERE user_id = ? ORDER BY done, updated DESC LIMIT 1000', user.id) });
     if (path === 'jots' && method === 'POST') {
@@ -1041,19 +1048,15 @@ export class Library extends DurableObject<Env> {
   private async aiSynopsis(user: UserRow, b: Body) {
     const n = this.ownNode(user, String(b.node_id ?? ''));
     if (n.body.replace(/\s/g, '').length < 80) return fail('요약하기엔 글이 너무 짧아요.');
-    if (!this.env.AI) return fail('AI 요약을 쓸 수 없어요. (서버에 AI 연결이 없음)', 503);
+    if (!this.env.AI && !geminiKey(this.env) && this.env.FAKE_AI !== '1') return fail('AI 요약을 쓸 수 없어요. (서버에 AI 연결이 없음)', 503);
     const day = new Date().toISOString().slice(0, 10);
     const used = Number(this.one('SELECT n FROM ai_usage WHERE user_id = ? AND day = ?', user.id, day)?.n ?? 0);
     if (used >= AI_DAILY) return fail(`오늘 AI 요약을 ${AI_DAILY}번 다 썼어요. 내일 다시 해 주세요.`, 429);
-    const messages = synopsisMessages(n.title, n.body);
     let text = '';
-    for (const model of [MODEL, FALLBACK]) {
-      try {
-        text = cleanSynopsis(readOutput(await this.env.AI.run(model as never, modelInput(model, messages) as never)));
-        if (text) break;
-      } catch (e) {
-        console.error('ai synopsis', model, e instanceof Error ? e.message : String(e));
-      }
+    try {
+      text = cleanSynopsis(await this.callAI(synopsisMessages(n.title, n.body), 500));
+    } catch (e) {
+      console.error('ai synopsis', e instanceof Error ? e.message : String(e));
     }
     if (!text) return fail('AI 가 요약을 만들지 못했어요. 잠시 뒤 다시 해 주세요.', 502);
     this.sql.exec('INSERT INTO ai_usage (user_id, day, n) VALUES (?, ?, 1) ON CONFLICT (user_id, day) DO UPDATE SET n = n + 1', user.id, day);
@@ -1064,7 +1067,7 @@ export class Library extends DurableObject<Env> {
   private async aiChapterInfo(user: UserRow, b: Body) {
     const n = this.ownNode(user, String(b.node_id ?? ''));
     if (n.body.replace(/%%[\s\S]*?%%/g, '').replace(/\s/g, '').length < 80) return fail('채우기엔 글이 너무 짧아요.');
-    if (!this.env.AI && this.env.FAKE_AI !== '1') return fail('AI 를 쓸 수 없어요. (서버에 AI 연결이 없음)', 503);
+    if (!this.env.AI && !geminiKey(this.env) && this.env.FAKE_AI !== '1') return fail('AI 를 쓸 수 없어요. (서버에 AI 연결이 없음)', 503);
     const day = new Date().toISOString().slice(0, 10);
     const used = Number(this.one('SELECT n FROM ai_usage WHERE user_id = ? AND day = ?', user.id, day)?.n ?? 0);
     if (used >= AI_DAILY) return fail(`오늘 AI 를 ${AI_DAILY}번 다 썼어요. 내일 다시 해 주세요.`, 429);
@@ -1133,6 +1136,15 @@ export class Library extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(now + 100);
     return true;
   }
+  private lastVia = '';
+  private gemList: { at: number; v: string[] } | null = null;
+  /** Gemini 모델 순서 (하루 한 번 새로 받는다) */
+  private async gemModels(key: string, f: typeof fetch): Promise<string[]> {
+    if (this.gemList && Date.now() - this.gemList.at < 86_400_000) return this.gemList.v;
+    const v = await geminiModels(key, f).catch(() => null);
+    if (v) this.gemList = { at: Date.now(), v };
+    return v ?? [];
+  }
   private async callAI(messages: unknown[], max: number): Promise<string> {
     if (this.env.FAKE_AI === '1') {
       // 개발용 (wrangler dev 에서는 Workers AI 를 부를 수 없다): 모양만 맞는 가짜 답
@@ -1141,12 +1153,34 @@ export class Library extends DurableObject<Env> {
       const isChapter = sys.includes('메모를 남긴다');
       return isChapter ? JSON.stringify({ summary: '가짜 요약: 이 장에서 일이 일어난다.', characters: [{ name: '홍설', doing: '꽃밭에 간다', traits: ['조용함'] }], events: [{ what: '꽃밭에 감', why: '시작' }], objects: [{ name: '거울', meaning: '기억' }], places: [{ name: '파빌리온', meaning: '쉼' }], motifs: ['오전 8시'], lines: ['홍설은 꽃밭에서 눈을 떴다.'] }) : '가짜 해설 문단입니다. [1] 장을 근거로 씁니다.';
     }
-    if (!this.env.AI) throw new Error('AI 연결이 없어요');
     let last: unknown = null;
+    // 1) Gemini (등록한 키가 있으면): Flash → Flash Lite → Gemma 4, 하루 한도가 찬 모델은 태평양 시간 자정까지 건너뛴다
+    const key = geminiKey(this.env);
+    if (key) {
+      const f = relayFetch(this.env.RELAY);
+      const day = pacificDay(Date.now());
+      const out = new Set(this.rows<{ model: string }>('SELECT model FROM gem_out WHERE day = ?', day).map((r) => r.model));
+      for (const model of (await this.gemModels(key, f)).filter((m) => !out.has(m)).slice(0, 4)) {
+        try {
+          const t = await askGemini(key, model, messages as Msg[], f);
+          this.lastVia = `Gemini ${model}`;
+          return t;
+        } catch (e) {
+          last = e;
+          if (e instanceof GeminiDayLimit) this.sql.exec('INSERT OR IGNORE INTO gem_out (model, day) VALUES (?, ?)', model, day);
+          console.error('gemini', model, e instanceof Error ? e.message : String(e));
+        }
+      }
+    }
+    // 2) Cloudflare Workers AI
+    if (!this.env.AI) throw last instanceof Error ? last : new Error('AI 연결이 없어요');
     for (const model of [MODEL, FALLBACK]) {
       try {
         const t = readOutput(await this.env.AI.run(model as never, modelInput(model, messages, max) as never));
-        if (t) return t;
+        if (t) {
+          this.lastVia = `Cloudflare ${model}`;
+          return t;
+        }
       } catch (e) {
         last = e;
         console.error('analysis ai', model, e instanceof Error ? e.message : String(e));

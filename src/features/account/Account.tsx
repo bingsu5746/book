@@ -14,6 +14,12 @@ export function Account() {
   const [pw, setPw] = useState({ current: '', password: '' });
   const [restoring, setRestoring] = useState('');
   const [prefs, setPrefs] = useState<{ autoAnalysis?: boolean; autoFill?: boolean; [k: string]: unknown }>({});
+  const [aiInfo, setAiInfo] = useState<{ gemini: boolean; cloudflare: boolean; geminiOut: string[]; lastVia: string } | null>(null);
+  useEffect(() => {
+    api<{ gemini: boolean; cloudflare: boolean; geminiOut: string[]; lastVia: string }>('ai/status')
+      .then(setAiInfo)
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     api<{ prefs: Record<string, unknown> }>('prefs')
       .then((r) => setPrefs(r.prefs ?? {}))
@@ -78,6 +84,13 @@ export function Account() {
         </section>
         <section className="panel stack">
           <h3 className="serif">장 정보 AI 채우기</h3>
+          {aiInfo && (
+            <p className="muted small">
+              쓰는 AI: {aiInfo.gemini ? 'Gemini (등록한 키) → 안 되면 Cloudflare Workers AI' : aiInfo.cloudflare ? 'Cloudflare Workers AI (Gemini 키를 찾지 못했어요)' : '없음'}
+              {!!aiInfo.geminiOut.length && ` · 오늘 한도가 찬 Gemini 모델: ${aiInfo.geminiOut.join(', ')}`}
+              {aiInfo.lastVia && ` · 마지막으로 쓴 것: ${aiInfo.lastVia}`}
+            </p>
+          )}
           <label className="check">
             <input
               type="checkbox"

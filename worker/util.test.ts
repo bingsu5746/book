@@ -125,3 +125,26 @@ describe('장 정보 답 읽기', () => {
     expect(parseInfo('모르겠어요')).toBeNull();
   });
 });
+
+import { geminiBody, geminiChain, geminiKey } from './gemini';
+describe('Gemini', () => {
+  it('이름에 gemini 가 들어간 비밀값을 찾고, 정해 둔 이름을 먼저', () => {
+    expect(geminiKey({ Life_gemini_api_key: ' a ', GEMINI_API_KEY: 'b', AI: {} })).toBe('b');
+    expect(geminiKey({ book_Gemini: 'c' })).toBe('c');
+    expect(geminiKey({ GEMINI_KEY: '  ' })).toBeUndefined();
+  });
+  it('Flash → Flash Lite → Gemma 4 순서, 그림 · 음성 모델 빼기', () => {
+    const models = ['gemini-3-flash', 'gemini-3.6-flash', 'gemini-3.1-flash-lite', 'gemma-4-26b-it', 'gemini-3-flash-image', 'gemini-3.6-flash-preview'].map((n) => ({ name: `models/${n}`, supportedGenerationMethods: ['generateContent'] }));
+    expect(geminiChain({ models })).toEqual(['gemini-3.6-flash', 'gemini-3.6-flash-preview', 'gemini-3-flash', 'gemini-3.1-flash-lite', 'gemma-4-26b-it']);
+  });
+  it('Gemma 는 시스템 지시를 첫 질문 앞에 붙인다', () => {
+    const m = [
+      { role: 'system', content: 'S' },
+      { role: 'user', content: 'U' },
+    ];
+    expect(geminiBody(m, 'gemini-3-flash')).toMatchObject({ systemInstruction: { parts: [{ text: 'S' }] }, contents: [{ role: 'user', parts: [{ text: 'U' }] }] });
+    const g = geminiBody(m, 'gemma-4-26b-it');
+    expect('systemInstruction' in g).toBe(false);
+    expect(g.contents[0].parts[0].text).toBe('S\n\nU');
+  });
+});

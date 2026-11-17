@@ -1,7 +1,8 @@
 // 사이트 파일은 그대로 내보내고, /api/* 는 서재 서버(Durable Object 하나)로 넘긴다.
 import { Library } from './library';
+import { Relay } from './relay';
 
-export { Library };
+export { Library, Relay };
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {

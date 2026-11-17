@@ -7,3 +7,9 @@ interface Env {
   /** 개발용: '1' 이면 Workers AI 대신 가짜 답 (wrangler dev 에서 분석집 흐름을 시험할 때만) */
   FAKE_AI?: string;
 }
+interface Env {
+  /** Gemini 요청 중계 (미국 서부, worker/relay.ts) */
+  RELAY?: DurableObjectNamespace<import('./relay').Relay>;
+  /** Google AI Studio 키. 이름에 gemini 가 들어간 비밀값이면 무엇이든 (예: GEMINI_API_KEY) */
+  GEMINI_API_KEY?: string;
+}
