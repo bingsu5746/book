@@ -15,7 +15,7 @@ export const KINDS: { id: EntryKind; label: string }[] = [
 ];
 export const kindLabel = (k: string) => KINDS.find((x) => x.id === k)?.label ?? '기타';
 export const DEFAULT_FIELDS: Record<EntryKind, string[]> = {
-  character: ['나이', '외모', '성격', '말투', '바라는 것', '두려운 것', '비밀', '이야기 속 변화'],
+  character: ['나이', '태어난 해', '외모', '성격', '말투', '바라는 것', '두려운 것', '비밀', '이야기 속 변화'],
   place: ['위치', '생김새', '분위기', '내력', '그곳의 규칙'],
   faction: ['목적', '우두머리', '구성원', '근거지', '다른 세력과의 관계'],
   item: ['생김새', '쓰임', '주인', '내력'],

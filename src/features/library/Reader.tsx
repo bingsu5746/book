@@ -127,7 +127,21 @@ export function Reader({
   const [marks, setMarks] = useState<Bookmark[]>([]);
   const [find, setFind] = useState(initialFind ?? '');
   const [markTab, setMarkTab] = useState<'mark' | 'line'>('mark');
-  const [selPop, setSelPop] = useState<{ x: number; y: number; n: string; pos: number; quote: string } | null>(null);
+  const [selPop, setSelPop] = useState<{ x: number; y: number; n: string; pos: number; quote: string; sentence: string } | null>(null);
+  const [define, setDefine] = useState<{ x: number; y: number; word: string; text: string; busy: boolean } | null>(null);
+  const askDefine = async () => {
+    if (!selPop) return;
+    const word = selPop.quote.trim();
+    const at = { x: selPop.x, y: selPop.y };
+    setSelPop(null);
+    setDefine({ ...at, word, text: '', busy: true });
+    try {
+      const r = await api<{ meaning: string }>('ai/define', { body: { word, sentence: selPop.sentence } });
+      setDefine({ ...at, word, text: r.meaning, busy: false });
+    } catch (e) {
+      setDefine({ ...at, word, text: (e as Error).message, busy: false });
+    }
+  };
   const [speaking, setSpeaking] = useState(false);
   useEffect(() => () => stopSpeaking(), []);
   const lines = marks.filter((m) => m.kind === 'line');
@@ -136,7 +150,7 @@ export function Reader({
   const readSelection = () => {
     setTimeout(() => {
       const s = getSelection();
-      if (!s || s.isCollapsed || !s.rangeCount || !canMark) return setSelPop(null);
+      if (!s || s.isCollapsed || !s.rangeCount || localOnly) return setSelPop(null);
       const r = s.getRangeAt(0);
       const start = (r.startContainer.nodeType === 1 ? (r.startContainer as Element) : r.startContainer.parentElement)?.closest<HTMLElement>('[data-n]');
       if (!start) return setSelPop(null);
@@ -147,7 +161,7 @@ export function Reader({
       const quote = String(s).trim();
       if (!off || !quote) return setSelPop(null);
       const rect = r.getBoundingClientRect();
-      setSelPop({ x: rect.left + rect.width / 2, y: rect.top, n: start.dataset.n!, pos: Number(start.dataset.o ?? 0) + off.start, quote: quote.slice(0, 1000) });
+      setSelPop({ x: rect.left + rect.width / 2, y: rect.top, n: start.dataset.n!, pos: Number(start.dataset.o ?? 0) + off.start, quote: quote.slice(0, 1000), sentence: sentenceAround(start.textContent ?? '', off.start, quote) });
     }, 10);
   };
   const addLine = async (withNote: boolean) => {
@@ -1042,12 +1056,33 @@ export function Reader({
       )}
       {selPop && (
         <div className="sel-pop" style={{ left: selPop.x, top: selPop.y }}>
-          <button onMouseDown={(e) => e.preventDefault()} onClick={() => addLine(false)}>
-            밑줄
-          </button>
-          <button onMouseDown={(e) => e.preventDefault()} onClick={() => addLine(true)}>
-            메모와 함께
-          </button>
+          {canMark && (
+            <>
+              <button onMouseDown={(e) => e.preventDefault()} onClick={() => addLine(false)}>
+                밑줄
+              </button>
+              <button onMouseDown={(e) => e.preventDefault()} onClick={() => addLine(true)}>
+                메모와 함께
+              </button>
+            </>
+          )}
+          {[...selPop.quote.trim()].length <= 20 && (
+            <button onMouseDown={(e) => e.preventDefault()} onClick={() => void askDefine()}>
+              뜻
+            </button>
+          )}
+        </div>
+      )}
+      {define && (
+        <div className="wl-pop" style={{ left: Math.min(Math.max(define.x, 150), innerWidth - 150), top: define.y + 24 }} role="dialog" aria-label={`${define.word} 뜻`}>
+          <div className="row" style={{ gap: 6 }}>
+            <b className="grow">{define.word}</b>
+            <button className="icon-btn" aria-label="닫기" onClick={() => setDefine(null)}>
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+          {define.busy ? <p className="tiny">뜻을 찾는 중…</p> : <p>{define.text}</p>}
+          {!define.busy && <span className="tiny" style={{ color: 'var(--rmuted)' }}>AI 가 이 문장에 맞춰 푼 뜻이에요. 틀릴 수 있어요.</span>}
         </div>
       )}
       {mode === 'page' ? (
@@ -1132,4 +1167,15 @@ function markNames(text: string, names: string[]) {
   if (!ns.length) return text;
   const re = new RegExp(`(${ns.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g');
   return text.split(re).map((part, i) => (ns.includes(part) ? <mark key={i}>{part}</mark> : part));
+}
+
+/** 고른 말이 든 문장 (뜻풀이에 맥락으로 보낸다) */
+function sentenceAround(text: string, at: number, quote: string): string {
+  const i = text.indexOf(quote, Math.max(0, at - 5)) >= 0 ? text.indexOf(quote, Math.max(0, at - 5)) : at;
+  const before = text.slice(0, i);
+  const a = Math.max(before.search(/[^.!?。…\n]*$/), i - 200);
+  const rest = text.slice(i);
+  const m = rest.search(/[.!?。…\n]/);
+  const z = m < 0 ? Math.min(text.length, i + 200) : Math.min(i + m + 1, i + 300);
+  return text.slice(Math.max(0, a), z).trim().slice(0, 500);
 }

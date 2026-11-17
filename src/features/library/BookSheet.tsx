@@ -15,6 +15,8 @@ export interface SheetBook {
   color?: string;
   seed: string;
   style?: CoverStyle;
+  /** 그림 표지 주소 */
+  image?: string | null;
   href: string;
   writeHref?: string;
   blurb?: string;
@@ -140,7 +142,7 @@ export function BookSheet({ book, from, onClose }: { book: SheetBook; from: HTML
           <Icon name="close" size={18} />
         </button>
         <div className="sheet-cover" ref={coverRef}>
-          <Cover title={book.title} color={book.color} seed={book.seed} author={book.author} style={book.style} />
+          <Cover title={book.title} color={book.color} seed={book.seed} author={book.author} style={book.style} image={book.image} />
         </div>
         <div className="sheet-body" ref={bodyRef}>
           <h2 className="serif">{book.title}</h2>

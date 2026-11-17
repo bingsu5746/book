@@ -9,8 +9,9 @@ import { Icon, Spinner, toast } from '../../lib/ui';
 import { entriesOf, KINDS, newItemId, type Entry, type EntryKind, type WItem } from '../../lib/world';
 import type { EditorHandle } from './Editor';
 
-type Tool = 'conflicts' | 'names' | 'polish' | 'questions' | 'dialogue';
+type Tool = 'reader' | 'conflicts' | 'names' | 'polish' | 'questions' | 'dialogue';
 const LIST: { id: Tool; label: string; desc: string }[] = [
+  { id: 'reader', label: '첫 독자 메모', desc: '처음 읽는 독자처럼, 궁금한 곳 · 늘어진 곳 · 헷갈린 곳 · 마음이 움직인 곳' },
   { id: 'conflicts', label: '설정 충돌 검사', desc: '세계관 항목 · 앞 장과 어긋나는 눈 색, 나이, 날짜 같은 곳' },
   { id: 'names', label: '인물 · 장소 뽑기', desc: '세계관에 아직 없는 이름을 찾아 항목으로 추천' },
   { id: 'polish', label: '퇴고 제안', desc: '고른 문단의 리듬 · 반복 · 어색한 문장을 고치기 전 · 후로' },
@@ -56,6 +57,7 @@ export function AiTools(props: Props) {
         </button>
         <h4 style={{ margin: 0 }}>{label}</h4>
       </div>
+      {tool === 'reader' && <FirstReader key={props.node.id} {...props} />}
       {tool === 'conflicts' && <Conflicts key={props.node.id} {...props} />}
       {tool === 'names' && <Names key={props.node.id} {...props} />}
       {tool === 'polish' && <Polish key={props.node.id} {...props} />}
@@ -368,6 +370,40 @@ function Dialogue({ node, items, editor, prepare }: Props) {
               끝맺음이 많이 겹쳐요: {close.map(([a, b]) => `${a} · ${b}`).join(', ')}. 말투가 비슷하게 들리는지 한번 읽어 보세요.
             </p>
           )}
+          <Left n={c.left} />
+        </>
+      )}
+    </>
+  );
+}
+
+const READER_LABEL: Record<string, string> = { curious: '궁금해짐', slow: '늘어짐', confused: '헷갈림', moved: '마음이 움직임' };
+function FirstReader({ node, body, editor, prepare }: Props) {
+  const c = useCall<{ notes: { kind: string; quote: string; note: string }[] }>();
+  const found = useMemo(() => (c.res?.notes ?? []).map((n) => ({ ...n, loc: locate(body, n.quote) })), [c.res, body]);
+  const shown = found.filter((n) => n.loc);
+  return (
+    <>
+      <p className="muted small">앞 장 줄거리를 아는 독자가 이 장을 처음 읽으며 든 반응이에요. 고쳐 쓰지 않고 반응만 남겨요. 한 독자의 감상일 뿐이니 참고로만.</p>
+      <button className="primary" disabled={c.busy} onClick={() => c.run(prepare, { tool: 'reader', node_id: node.id })}>
+        {c.busy ? '읽는 중…' : c.res ? '다시 읽어 달라기' : '읽어 달라기'}
+      </button>
+      {c.busy && <Spinner label="AI 가 읽는 중" />}
+      {c.res && !c.busy && (
+        <>
+          {!shown.length && <p className="small">남긴 반응이 없어요.</p>}
+          <div className="stack" style={{ gap: 10 }}>
+            {shown.map((n, k) => (
+              <div key={k} className="ai-card">
+                <span className="faint tiny">{READER_LABEL[n.kind] ?? n.kind}</span>
+                <button className="ghost small quote" onClick={() => editor.current?.select(n.loc!.at, n.loc!.at + n.loc!.len)}>
+                  「{n.quote}」
+                </button>
+                <p className="small">{n.note}</p>
+              </div>
+            ))}
+          </div>
+          {found.length > shown.length && <p className="faint tiny">원고에서 문장을 찾지 못한 {found.length - shown.length}곳은 뺐어요.</p>}
           <Left n={c.left} />
         </>
       )}

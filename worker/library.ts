@@ -17,7 +17,8 @@ import { flattenTree, snippets } from './util';
 import { cleanSynopsis, FALLBACK, infoMessages, INFO_MARK, MODEL, modelInput, parseInfo, readOutput, synopsisMessages } from './ai';
 import { askGemini, GeminiDayLimit, geminiKey, geminiModels, pacificDay, type Msg } from './gemini';
 import { relayFetch } from './relay';
-import { clueMessages, parseClues, cleanRecap, conflictMessages, dialogueMessages, fakeTool, findDialogue, markDialogue, namesMessages, parseEdits, parseIssues, parseNames, parseQuestions, parseSpeakers, polishMessages, previousDigest, questionMessages, readJson, recapMessages, TOOLS, type ToolName } from './tools';
+import { matterNodes } from '../src/lib/matter';
+import { clueMessages, parseClues, readerMessages, parseReader, sentencesWith, synonymMessages, parseOptions, defineMessages, cleanRecap, conflictMessages, dialogueMessages, fakeTool, findDialogue, markDialogue, namesMessages, parseEdits, parseIssues, parseNames, parseQuestions, parseSpeakers, polishMessages, previousDigest, questionMessages, readJson, recapMessages, TOOLS, type ToolName } from './tools';
 import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, SECTIONS, sectionMessages, type ChapterNote } from './analysis';
 /** 한 사람이 하루에 시작할 수 있는 분석집 수 */
 const ANALYSIS_DAILY = 5;
@@ -187,6 +188,7 @@ export class Library extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS analysis_jobs_book ON analysis_jobs (book_id);
       CREATE TABLE IF NOT EXISTS ai_usage (user_id TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (user_id, day));
       CREATE TABLE IF NOT EXISTS gem_out (model TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (model, day));
+      CREATE TABLE IF NOT EXISTS covers (book_id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS links (token TEXT PRIMARY KEY, book_id TEXT NOT NULL, owner TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER, revoked INTEGER);
       CREATE INDEX IF NOT EXISTS links_book ON links (book_id);
       CREATE TABLE IF NOT EXISTS jots (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL);
@@ -253,6 +255,12 @@ export class Library extends DurableObject<Env> {
     // 로그인 없는 읽기 링크: 그 책의 가장 최근 판만, 읽기만
     const pub = path.match(/^public\/([a-f0-9]{32})$/);
     if (pub && req.method === 'GET') return this.publicBook(pub[1]);
+    const pubCover = path.match(/^public\/([a-f0-9]{32})\/cover$/);
+    if (pubCover && req.method === 'GET') {
+      const l = this.one('SELECT book_id, expires, revoked FROM links WHERE token = ?', pubCover[1]);
+      if (!l || l.revoked || (l.expires && Number(l.expires) < Date.now())) return fail('그림을 찾을 수 없어요.', 404);
+      return this.coverResponse(String(l.book_id));
+    }
     if (!session) return json({ error: '로그인이 필요해요.' }, 401, { 'set-cookie': clearCookie() });
     let renewed: string | null = null;
     if (session.expires - Date.now() < RENEW_DAYS * DAY) {
@@ -299,6 +307,7 @@ export class Library extends DurableObject<Env> {
     if (path === 'ai/chapter-info' && method === 'POST') return this.aiChapterInfo(user, b);
     if (path === 'ai/tool' && method === 'POST') return this.aiTool(user, b);
     if (path === 'ai/recap' && method === 'POST') return this.aiRecap(user, b);
+    if (path === 'ai/define' && method === 'POST') return this.aiDefine(user, b);
     if (path === 'ai/status' && method === 'GET') {
       const day = pacificDay(Date.now());
       return json({ gemini: !!geminiKey(this.env), cloudflare: !!this.env.AI, geminiOut: this.rows('SELECT model FROM gem_out WHERE day = ?', day).map((r) => r.model), lastVia: this.lastVia });
@@ -439,6 +448,14 @@ export class Library extends DurableObject<Env> {
     if (path === 'community' && method === 'GET') return this.community(user);
     if (path === 'feed' && method === 'GET') return this.feed(user);
     if ((r = m(/^editions\/([a-z0-9]+)$/)) && method === 'GET') return this.getEdition(user, r[1]);
+    if ((r = m(/^books\/([a-z0-9]+)\/cover$/))) {
+      if (method === 'GET') {
+        this.readableBook(user, r[1]);
+        return this.coverResponse(r[1]);
+      }
+      if (method === 'PUT') return this.putCover(user, r[1], b);
+      if (method === 'DELETE') return this.deleteCover(user, r[1]);
+    }
     if ((r = m(/^books\/([a-z0-9]+)\/links$/))) {
       if (method === 'GET') return this.listLinks(user, r[1]);
       if (method === 'POST') return this.makeLink(user, r[1], b);
@@ -670,7 +687,7 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('DELETE FROM edition_nodes WHERE edition_id = ?', e.id);
       this.sql.exec('DELETE FROM likes WHERE edition_id = ?', e.id);
     }
-    for (const t of ['nodes', 'snapshots', 'editions', 'annotations', 'ratings', 'links']) this.sql.exec(`DELETE FROM ${t} WHERE book_id = ?`, id);
+    for (const t of ['nodes', 'snapshots', 'editions', 'annotations', 'ratings', 'links', 'covers']) this.sql.exec(`DELETE FROM ${t} WHERE book_id = ?`, id);
     this.sql.exec('DELETE FROM books WHERE id = ?', id);
   }
   private touchBook(id: string) {
@@ -1065,7 +1082,9 @@ export class Library extends DurableObject<Env> {
     const full = this.one('SELECT * FROM books WHERE id = ?', bookId)!;
     const chars = nodes.reduce((s, n) => s + charsNoSpace(n.body), 0);
     this.sql.exec('INSERT INTO editions (id, book_id, number, note, title, subtitle, author, color, chars, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, bookId, number, str(note, 1000), full.title, full.subtitle, full.author, full.color, chars, Date.now());
-    nodes.forEach((n, i) => this.sql.exec('INSERT INTO edition_nodes (edition_id, node_id, sort, depth, kind, title, body) VALUES (?, ?, ?, ?, ?, ?, ?)', id, n.id, i, n.depth, n.kind, n.title, n.body));
+    // 앞붙이(헌사) · 뒷붙이(작가의 말 · 판권면)도 판에 넣는다
+    const mt = matterNodes({ title: String(full.title), author: String(full.author), meta: parseJson(full.meta) }, { number, date: new Date().toISOString().slice(0, 10) });
+    [...mt.front, ...nodes, ...mt.back].forEach((n, i) => this.sql.exec('INSERT INTO edition_nodes (edition_id, node_id, sort, depth, kind, title, body) VALUES (?, ?, ?, ?, ?, ?, ?)', id, n.id, i, n.depth, n.kind, n.title, n.body));
     return { id, number };
   }
   private async publish(user: UserRow, bookId: string, b: Body) {
@@ -1080,6 +1099,34 @@ export class Library extends DurableObject<Env> {
     if (this.autoAnalysisOn(user) && !parseJson(full.meta).analysisOf) analysis = (await this.startAnalysis(user, bookId)) === true;
     return json({ edition: { id, number }, analysis });
   }
+  // ---------------------------------------------------------------- 그림 표지
+  private coverResponse(bookId: string) {
+    const c = this.one('SELECT mime, data FROM covers WHERE book_id = ?', bookId);
+    if (!c) return fail('표지 그림이 없어요.', 404);
+    const bin = Uint8Array.from(atob(String(c.data)), (x) => x.charCodeAt(0));
+    return new Response(bin, { headers: { 'content-type': String(c.mime), 'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
+  }
+  private putCover(user: UserRow, bookId: string, b: Body) {
+    const book = this.ownBook(user, bookId);
+    const mime = String(b.mime ?? '');
+    const data = String(b.data ?? '');
+    if (!IMAGE_TYPES.has(mime) || !/^[A-Za-z0-9+/=]+$/.test(data)) return fail('그림 파일이 아니에요.');
+    if (data.length > MAX_IMAGE) return fail('그림이 너무 커요.', 413);
+    const now = Date.now();
+    this.sql.exec('INSERT OR REPLACE INTO covers (book_id, mime, data, updated) VALUES (?, ?, ?, ?)', bookId, mime, data, now);
+    const meta = { ...parseJson(book.meta), coverImage: now };
+    this.sql.exec('UPDATE books SET meta = ?, updated = ? WHERE id = ?', JSON.stringify(meta), now, bookId);
+    return json({ coverImage: now });
+  }
+  private deleteCover(user: UserRow, bookId: string) {
+    const book = this.ownBook(user, bookId);
+    this.sql.exec('DELETE FROM covers WHERE book_id = ?', bookId);
+    const meta = { ...parseJson(book.meta) } as Record<string, unknown>;
+    delete meta.coverImage;
+    this.sql.exec('UPDATE books SET meta = ? WHERE id = ?', JSON.stringify(meta), bookId);
+    return json({ ok: true });
+  }
+
   // ---------------------------------------------------------------- 로그인 없는 읽기 링크
   private listLinks(user: UserRow, bookId: string) {
     this.ownBook(user, bookId);
@@ -1120,7 +1167,8 @@ export class Library extends DurableObject<Env> {
     const e = this.one('SELECT id, number, created FROM editions WHERE book_id = ? ORDER BY number DESC LIMIT 1', book.id);
     if (!e) return fail('아직 보여 줄 판이 없어요.', 404);
     const nodes = this.rows('SELECT node_id AS id, depth, kind, title, body FROM edition_nodes WHERE edition_id = ? ORDER BY sort', e.id);
-    return json({ book: { title: book.title, author: book.author, color: book.color, blurb: str((parseJson(book.meta) as { blurb?: unknown }).blurb, 3000) }, edition: e, nodes });
+    const bm = parseJson(book.meta) as { coverImage?: number; coverMode?: string };
+    return json({ book: { title: book.title, author: book.author, color: book.color, cover: bm.coverImage && bm.coverMode !== 'text' ? bm.coverImage : null, blurb: str((parseJson(book.meta) as { blurb?: unknown }).blurb, 3000) }, edition: e, nodes });
   }
   private unshare(user: UserRow, bookId: string) {
     this.ownBook(user, bookId);
@@ -1194,7 +1242,11 @@ export class Library extends DurableObject<Env> {
     const n = this.ownNode(user, String(b.node_id ?? ''));
     const body = String(n.body ?? '');
     const plain = body.replace(/%%[\s\S]*?%%/g, '').replace(/\s/g, '');
-    if (tool === 'polish') {
+    const word = str(b.word, 30).trim();
+    if (tool === 'synonyms') {
+      if (!word) return fail('바꿔 볼 말을 골라 주세요.');
+      if (!sentencesWith(body, word).length) return fail('원고에서 그 말을 찾지 못했어요.');
+    } else if (tool === 'polish') {
       if (str(b.text, 5000).replace(/\s/g, '').length < 10) return fail('고칠 문단을 골라 주세요.');
     } else if (tool !== 'questions' && plain.length < 80) return fail('글이 너무 짧아요.');
     const gate = this.aiGate(user);
@@ -1206,6 +1258,8 @@ export class Library extends DurableObject<Env> {
     else if (tool === 'names') msgs = namesMessages(body, names(b.known));
     else if (tool === 'polish') msgs = polishMessages(str(b.text, 4000));
     else if (tool === 'questions') msgs = questionMessages(n.title, String(n.synopsis ?? ''), previousDigest(this.unitsBefore(n), 5000), body);
+    else if (tool === 'reader') msgs = readerMessages(n.title, body, previousDigest(this.unitsBefore(n), 5000));
+    else if (tool === 'synonyms') msgs = synonymMessages(word, sentencesWith(body, word));
     else if (tool === 'clues') msgs = clueMessages(n.title, body, names(b.known, 100), previousDigest(this.unitsBefore(n), 5000));
     else {
       lines = findDialogue(body);
@@ -1227,9 +1281,28 @@ export class Library extends DurableObject<Env> {
     if (tool === 'polish') return json({ edits: parseEdits(o), left });
     if (tool === 'questions') return json({ questions: parseQuestions(o), left });
     if (tool === 'clues') return json({ ...parseClues(o), left });
+    if (tool === 'reader') return json({ notes: parseReader(o), left });
+    if (tool === 'synonyms') return json({ options: parseOptions(o, word), left });
     return json({ lines: parseSpeakers(o, lines), left });
   }
 
+  /** 읽다가 모르는 말: 문장 맥락에 맞는 짧은 뜻풀이 */
+  private async aiDefine(user: UserRow, b: Body) {
+    const word = str(b.word, 40).trim();
+    const sentence = str(b.sentence, 600).trim();
+    if (!word || [...word].length > 20) return fail('뜻을 볼 낱말을 짧게 골라 주세요.');
+    const gate = this.aiGate(user);
+    if (gate instanceof Response) return gate;
+    let text = '';
+    try {
+      text = (await this.callAI(defineMessages(word, sentence || word), 400)).replace(/<think>[\s\S]*?<\/think>/g, '').trim().slice(0, 500);
+    } catch (e) {
+      console.error('ai define', e instanceof Error ? e.message : String(e));
+    }
+    if (!text) return fail('AI 가 뜻을 풀지 못했어요. 잠시 뒤 다시 해 주세요.', 502);
+    this.aiCount(user, gate.day);
+    return json({ meaning: text, left: AI_DAILY - gate.used - 1 });
+  }
   /** 지난 이야기: 읽은 데까지의 글(쓰는 쪽이 잘라서 보냄)만으로 요약 */
   private async aiRecap(user: UserRow, b: Body) {
     const material = str(b.material, 20000);
@@ -1486,6 +1559,7 @@ export class Library extends DurableObject<Env> {
   private community(user: UserRow) {
     const books = this.rows(
       `SELECT b.id, b.owner, b.title, b.subtitle, b.author, b.color, b.world_id, b.share_world, u.nickname AS owner_name,
+        json_extract(b.meta, '$.coverImage') AS cover_image, json_extract(b.meta, '$.coverMode') AS cover_mode,
         e.id AS edition_id, e.number AS edition, e.created AS published, e.chars, e.note,
         (SELECT AVG(stars) FROM ratings r WHERE r.book_id = b.id) AS stars, (SELECT COUNT(*) FROM ratings r WHERE r.book_id = b.id) AS rating_count,
         (SELECT COUNT(*) FROM annotations a WHERE a.book_id = b.id AND a.deleted IS NULL) AS note_count

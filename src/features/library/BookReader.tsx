@@ -7,9 +7,10 @@ import { Modal } from '../../lib/ui';
 import { go } from '../../lib/router';
 import { loadFull, toReadNodes, type FullBook } from '../../lib/store';
 import { Spinner, toast } from '../../lib/ui';
-import { makeEpub } from '../../lib/epub';
+import { makeEpubWithCover } from '../../lib/epub';
 import { download } from '../../lib/exporters';
 import { Reader } from './Reader';
+import { matterNodes } from '../../lib/matter';
 
 /** 내 책 읽기 (내가 쓴 책 · 들인 책). 받아 둔 사본이 있으면 인터넷 없이도 열린다 */
 export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeId?: string; at?: string | null; find?: string | null }) {
@@ -23,7 +24,11 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
       .then((w) => setEntries(toRefs(w.items)))
       .catch(() => {});
   }, [data?.book.world_id]);
-  const nodesMemo = useMemo(() => (data ? toReadNodes(data.nodes) : []), [data]);
+  const nodesMemo = useMemo(() => {
+    if (!data) return [];
+    const m = matterNodes(data.book, { number: data.book.last_edition ?? undefined, date: new Date().toLocaleDateString('sv-SE') });
+    return [...m.front, ...toReadNodes(data.nodes), ...m.back];
+  }, [data]);
   const patchMeta = (m: Record<string, unknown>) => {
     if (!data) return;
     const meta = { ...data.book.meta, ...m };
@@ -56,7 +61,7 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
       </div>
     );
   const nodes = nodesMemo;
-  if (!nodes.some((n) => n.body.trim()))
+  if (!nodes.some((n) => n.body.trim() && !n.id.startsWith('m-')))
     return (
       <div className="main">
         <p>아직 읽을 글이 없어요.</p>
@@ -84,7 +89,7 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
       onExit={() => (history.length > 1 ? history.back() : go('library'))}
       actions={[
         ...(data.book.kind === 'write' ? [{ label: '집필실에서 고치기', icon: 'pen', href: `#/write/${bookId}` }] : [{ label: '독서 기록', icon: 'star', onClick: () => setLog(true) }]),
-        { label: '전자책(EPUB)으로 받기', icon: 'download', onClick: () => download(`${data.book.title}.epub`, new Blob([makeEpub(data.book, nodes, { breaks: data.book.kind === 'write' }) as BlobPart], { type: 'application/epub+zip' })) },
+        { label: '전자책(EPUB)으로 받기', icon: 'download', onClick: async () => download(`${data.book.title}.epub`, new Blob([(await makeEpubWithCover(data.book, nodes, { breaks: data.book.kind === 'write' })) as BlobPart], { type: 'application/epub+zip' })) },
       ]}
     />
     {log && <ReadLog book={data.book} onClose={() => setLog(false)} onSave={(m) => (patchMeta(m), setLog(false))} />}

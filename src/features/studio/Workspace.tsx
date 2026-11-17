@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { download, toHtml, toMarkdown, toText } from '../../lib/exporters';
-import { makeEpub } from '../../lib/epub';
+import { makeEpubWithCover } from '../../lib/epub';
 import { local } from '../../lib/idb';
 import { go } from '../../lib/router';
 import { flatten, loadFull, onSaveState, pushDraft, saveBody, toReadNodes, type FullBook } from '../../lib/store';
@@ -16,6 +16,7 @@ import { Editor, type EditorHandle } from './Editor';
 import { TidyBreaks } from './TidyBreaks';
 import { NameCheck } from './NameCheck';
 import { ClueLedger } from './ClueLedger';
+import { matterNodes } from '../../lib/matter';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
 import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
@@ -459,7 +460,11 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const body = sel?.body ?? '';
   const written = sessionStart.current != null ? total - sessionStart.current : 0;
   const sprintLeft = sprint ? Math.max(0, sprint.end - now) : 0;
-  const readNodes = () => toReadNodes(data.nodes);
+  /** 내보낼 칸: 앞붙이 · 원고 · 뒷붙이 (plain: 글 · 마크다운용) */
+  const readNodes = (plain = false) => {
+    const m = matterNodes(book, { number: book.last_edition ?? undefined, date: new Date().toLocaleDateString('sv-SE') }, { plain });
+    return [...m.front, ...toReadNodes(data.nodes), ...m.back];
+  };
   const toggleSpeak = () => {
     if (speaking) {
       stopSpeaking();
@@ -621,9 +626,9 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
               <hr />
               <button onClick={() => (close(), setHelp(true))}>단축키 보기</button>
               <hr />
-              <button onClick={() => (close(), download(`${book.title}.epub`, new Blob([makeEpub(book, readNodes(), { breaks: book.kind === 'write' }) as BlobPart], { type: 'application/epub+zip' })))}>전자책(EPUB)으로 내보내기</button>
-              <button onClick={() => (close(), download(`${book.title}.md`, toMarkdown(book.title, book.author, readNodes()), 'text/markdown;charset=utf-8'))}>마크다운(.md)으로 내보내기</button>
-              <button onClick={() => (close(), download(`${book.title}.txt`, toText(book.title, book.author, readNodes())))}>글(.txt)로 내보내기</button>
+              <button onClick={async () => (close(), download(`${book.title}.epub`, new Blob([(await makeEpubWithCover(book, readNodes(), { breaks: book.kind === 'write' })) as BlobPart], { type: 'application/epub+zip' })))}>전자책(EPUB)으로 내보내기</button>
+              <button onClick={() => (close(), download(`${book.title}.md`, toMarkdown(book.title, book.author, readNodes(true)), 'text/markdown;charset=utf-8'))}>마크다운(.md)으로 내보내기</button>
+              <button onClick={() => (close(), download(`${book.title}.txt`, toText(book.title, book.author, readNodes(true))))}>글(.txt)로 내보내기</button>
               <button onClick={() => (close(), download(`${book.title}.html`, toHtml(book.title, book.author, readNodes(), { breaks: book.kind === 'write' }), 'text/html;charset=utf-8'))}>인쇄용 HTML 로 내보내기</button>
             </>
           )}

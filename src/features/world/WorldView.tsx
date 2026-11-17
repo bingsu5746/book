@@ -95,7 +95,7 @@ export function WorldView({ worldId, tab, entryId }: { worldId: string; tab?: st
           {t === 'entries' && !open && <EntryList items={items} ro={ro} worldId={worldId} onCreate={(e, stay) => (put(e, true), !stay && go(`worlds/${worldId}/entries/${e.id}`))} />}
           {t === 'entries' && open && <EntryEditor key={open.id} entry={open} items={items} ro={ro} worldId={worldId} put={put} remove={remove} books={data.books} />}
           {t === 'graph' && <Graph items={items} ro={ro} worldId={worldId} put={put} remove={remove} />}
-          {t === 'maps' && <WorldMaps worldId={worldId} items={items} ro={ro} put={put} remove={remove} />}
+          {t === 'maps' && <WorldMaps worldId={worldId} items={items} ro={ro} put={put} remove={remove} books={data.books} />}
           {t === 'timeline' && <Timeline items={items} ro={ro} put={put} remove={remove} books={data.books} />}
           {t === 'appear' && <Appear worldId={worldId} items={items} />}
           {t === 'templates' && <Templates items={items} put={put} />}

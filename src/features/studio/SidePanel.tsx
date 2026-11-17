@@ -11,6 +11,7 @@ import { entriesOf, fieldsFor, kindLabel, mentionedIn, type Entry, type WEvent, 
 import type { EditorHandle } from './Editor';
 import { infoGaps } from '../../lib/fillinfo';
 import { AiTools } from './AiTools';
+import { agesInChapter, birthYear, yearIn } from '../../lib/ages';
 import { Alts } from './Alts';
 import { Traces } from './Traces';
 
@@ -81,7 +82,7 @@ export function SidePanel({
             <History node={node} body={body} onRestore={onRestore} />
           </>
         )}
-        {node && tab === 'revise' && <Revise body={body} editor={editor} />}
+        {node && tab === 'revise' && <Revise key={node.id} nodeId={node.id} prepare={prepareAi} body={body} editor={editor} />}
         {node && tab === 'ai' && <AiTools node={node} body={body} items={items} worldId={worldId} editor={editor} prepare={prepareAi} onAddEntries={onAddEntries} />}
         {node && tab === 'notes' && <FriendNotes bookId={bookId} node={node} body={body} editor={editor} />}
       </div>
@@ -216,8 +217,50 @@ function Info({ node, items, onPatch, summarize, fillInfo }: { node: BookNode; i
           <option key={p.id} value={p.name} />
         ))}
       </datalist>
+      <Ages node={node} items={items} />
       <p className="faint tiny">마지막 저장 {fmtDate(node.updated, true)}</p>
     </>
+  );
+}
+
+/** 이 장에서의 인물 나이 (태어난 해 + 이 장의 연도) */
+function Ages({ node, items }: { node: BookNode; items: WItem[] }) {
+  const body = node.body ?? '';
+  const events = items.filter((i): i is WEvent => i.type === 'event' && i.nodes.includes(node.id));
+  const fromTime = yearIn(String(node.meta.time ?? ''));
+  const fromEvent = events.map((e) => yearIn(e.when)).find((y) => y != null) ?? null;
+  const year = fromTime ?? fromEvent;
+  const here = useMemo(() => mentionedIn(body, entriesOf(items).filter((e) => e.kind === 'character')), [body, items]);
+  const people = here.map((h) => h.entry);
+  const withBirth = people.filter((p) => birthYear(p.fields) != null);
+  if (!people.length) return null;
+  const rows = year != null ? agesInChapter(year, withBirth, body) : [];
+  return (
+    <details className="ages" open={rows.some((r) => r.mismatch.length)}>
+      <summary className="small">
+        이 장의 인물 나이{year != null ? ` · ${year}년` : ''}
+        {rows.some((r) => r.mismatch.length) && <span className="ages-warn"> · 원고와 다른 곳</span>}
+      </summary>
+      {year == null ? (
+        <p className="faint tiny">장 정보 「이야기 속 시간」이나 이 장과 이은 연표 사건에 「1998년」처럼 연도를 적으면, 인물의 「태어난 해」로 나이를 셈해 줘요.</p>
+      ) : !withBirth.length ? (
+        <p className="faint tiny">이 장에 나오는 인물의 세계관 항목에 「태어난 해」(예: 1981)를 적으면 나이를 셈해 줘요.</p>
+      ) : (
+        <div className="stack" style={{ gap: 6, marginTop: 6 }}>
+          {rows.map((r) => (
+            <div key={r.name} className="small">
+              <b>{r.name}</b> 만 {r.age}살 <span className="faint tiny">(세는 나이 {r.age + 1}살 · {r.born}년생)</span>
+              {r.mismatch.map((m, i) => (
+                <p key={i} className="tiny ages-warn" style={{ margin: '2px 0 0' }}>
+                  원고에는 {m.age}살: 「{m.text}」
+                </p>
+              ))}
+            </div>
+          ))}
+          <p className="faint tiny">연도: {fromTime != null ? '이 장의 「이야기 속 시간」' : '이 장과 이은 연표 사건'}. 생일 전후로 한 살 차이는 봐줘요.</p>
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -429,16 +472,31 @@ function History({ node, body, onRestore }: { node: BookNode; body: string; onRe
   );
 }
 
-function Revise({ body, editor }: { body: string; editor: React.RefObject<EditorHandle | null> }) {
+function Revise({ body, editor, nodeId, prepare }: { body: string; editor: React.RefObject<EditorHandle | null>; nodeId: string; prepare: () => Promise<void> }) {
   return (
     <>
       <Traces body={body} editor={editor} />
       <hr className="side-hr" />
-      <ReviseStats body={body} editor={editor} />
+      <ReviseStats body={body} editor={editor} nodeId={nodeId} prepare={prepare} />
     </>
   );
 }
-function ReviseStats({ body, editor }: { body: string; editor: React.RefObject<EditorHandle | null> }) {
+function ReviseStats({ body, editor, nodeId, prepare }: { body: string; editor: React.RefObject<EditorHandle | null>; nodeId: string; prepare: () => Promise<void> }) {
+  const [word, setWord] = useState<string | null>(null);
+  const [alts, setAlts] = useState<{ word: string; options: { word: string; note: string }[] } | null>(null);
+  const [altBusy, setAltBusy] = useState(false);
+  const askAlts = async (w: string) => {
+    setAltBusy(true);
+    try {
+      await prepare();
+      const r = await api<{ options: { word: string; note: string }[] }>('ai/tool', { body: { tool: 'synonyms', node_id: nodeId, word: w } });
+      setAlts({ word: w, options: r.options });
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setAltBusy(false);
+    }
+  };
   const [longAt, setLongAt] = useState(80);
   const [show, setShow] = useState<'' | 'repeat' | 'long'>('');
   const a = useMemo(() => analyze(body, { longAt }), [body, longAt]);
@@ -514,11 +572,36 @@ function ReviseStats({ body, editor }: { body: string; editor: React.RefObject<E
         <h4>자주 쓴 말</h4>
         <div className="row wrap" style={{ marginTop: 6 }}>
           {a.topWords.slice(0, 30).map((w) => (
-            <button key={w.w} className="chip" onClick={() => editor.current?.find(w.w)}>
+            <button key={w.w} className={`chip${word === w.w ? ' on' : ''}`} onClick={() => (editor.current?.find(w.w), setWord(w.w))}>
               {w.w} <span className="faint">{w.n}</span>
             </button>
           ))}
         </div>
+        {word && (
+          <div className="ai-card" style={{ marginTop: 8 }}>
+            <div className="row" style={{ gap: 6 }}>
+              <span className="small grow">
+                「{word}」 — 편집기 찾기 창에서 하나씩 넘겨 볼 수 있어요.
+              </span>
+              <button className="small" disabled={altBusy} onClick={() => askAlts(word)}>
+                {altBusy ? '찾는 중…' : '바꿔 쓸 말 (AI)'}
+              </button>
+            </div>
+            {alts?.word === word && (
+              <>
+                {!alts.options.length && <p className="faint small">알맞은 말을 찾지 못했어요.</p>}
+                <div className="stack" style={{ gap: 4 }}>
+                  {alts.options.map((o) => (
+                    <p key={o.word} className="small" style={{ margin: 0 }}>
+                      <b>{o.word}</b> {o.note && <span className="faint tiny">· {o.note}</span>}
+                    </p>
+                  ))}
+                </div>
+                <p className="faint tiny">문장 맥락을 보고 고른 후보예요. 어느 자리를 바꿀지는 직접 정해 주세요.</p>
+              </>
+            )}
+          </div>
+        )}
       </div>
       <div>
         <h4>문장 끝맺음</h4>

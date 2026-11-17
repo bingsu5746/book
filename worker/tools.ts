@@ -3,8 +3,8 @@
 // 모델 답은 JSON 으로 받고, 원고에서 찾을 수 없는 인용은 쓰는 쪽에서 걸러 낸다.
 import { clip } from './ai';
 
-export type ToolName = 'conflicts' | 'names' | 'polish' | 'questions' | 'dialogue' | 'clues';
-export const TOOLS: ToolName[] = ['conflicts', 'names', 'polish', 'questions', 'dialogue', 'clues'];
+export type ToolName = 'conflicts' | 'names' | 'polish' | 'questions' | 'dialogue' | 'clues' | 'reader' | 'synonyms';
+export const TOOLS: ToolName[] = ['conflicts', 'names', 'polish', 'questions', 'dialogue', 'clues', 'reader', 'synonyms'];
 
 /** 가짜 답(개발용)을 고르는 표시: 시스템 지시에 들어 있다 */
 export const MARK = {
@@ -15,6 +15,9 @@ export const MARK = {
   questions: '질문을 던지는 편집자',
   dialogue: '대사의 화자를 가리는 편집자',
   clues: '복선을 찾는 편집자',
+  reader: '원고를 처음 읽는 독자',
+  synonyms: '바꿔 쓸 말을 찾는 교정자',
+  define: '낱말 뜻을 풀어 주는 사전 편찬자',
 } as const;
 
 const BASE = '원고와 주어진 자료에 실제로 쓰인 것만 근거로 한다. 없는 사실을 지어내지 않는다. 확실하지 않으면 뺀다.';
@@ -130,6 +133,64 @@ export function parseClues(o: Record<string, unknown>): { plants: ClueHint[]; pa
       .filter((x) => x.name && x.quote)
       .slice(0, 8);
   return { plants: one(o.plants), payoffs: one(o.payoffs) };
+}
+
+// ---------------------------------------------------------------- 첫 독자 · 바꿔 쓸 말 · 뜻풀이
+export const READER_KINDS = ['curious', 'slow', 'confused', 'moved'] as const;
+export function readerMessages(title: string, body: string, previous: string) {
+  return [
+    {
+      role: 'system',
+      content:
+        `너는 이 소설 ${MARK.reader}다. 앞 장 줄거리를 알고 지금 장을 처음 읽는다. 읽으면서 든 반응을 원고의 자리와 함께 남긴다: 궁금해진 곳(curious), 늘어지거나 지루한 곳(slow), 누가 누구인지 · 무슨 일인지 헷갈린 곳(confused), 마음이 움직인 곳(moved). ` +
+        '원고를 고쳐 쓰거나 다음 전개를 제안하지 않는다. 평가 점수를 매기지 않는다. 솔직하되 원고에 있는 것만 근거로, 많아야 8개. ' +
+        `${JSON_ONLY} 모양: {"notes": [{"kind": "curious | slow | confused | moved", "quote": "원고에서 그대로 옮긴 문장 일부 (한 글자도 바꾸지 않음)", "note": "독자로서 든 생각 한두 문장"}]}`,
+    },
+    { role: 'user', content: `앞 장 자료:\n${previous.trim() || '(없음)'}\n\n지금 장: ${title || '(제목 없음)'}\n원고:\n${clip(body).text}` },
+  ];
+}
+export function parseReader(o: Record<string, unknown>) {
+  return arr(o.notes)
+    .map((x) => ({ kind: (READER_KINDS as readonly string[]).includes(s(x.kind, 12)) ? s(x.kind, 12) : 'curious', quote: s(x.quote, 300), note: s(x.note, 300) }))
+    .filter((x) => x.quote && x.note)
+    .slice(0, 10);
+}
+/** 원고에서 그 말이 든 문장 몇 개 */
+export function sentencesWith(body: string, word: string, max = 6): string[] {
+  const t = clip(body, 40000).text;
+  return t
+    .split(/(?<=[.!?。…])\s+|\n+/)
+    .map((x) => x.trim())
+    .filter((x) => x.includes(word))
+    .slice(0, max)
+    .map((x) => x.slice(0, 300));
+}
+export function synonymMessages(word: string, sentences: string[]) {
+  return [
+    {
+      role: 'system',
+      content:
+        `너는 소설 원고의 ${MARK.synonyms}다. 작가가 「${word}」를 너무 자주 썼다. 주어진 문장들의 맥락에 맞게 바꿔 쓸 수 있는 한국어 낱말 · 표현을 많아야 8개 고른다. 뜻이 달라지는 말은 넣지 않는다. 문장을 새로 쓰지 않는다. ` +
+        `${JSON_ONLY} 모양: {"options": [{"word": "바꿔 쓸 말", "note": "어떤 문장 · 느낌에 어울리는지 짧게"}]}`,
+    },
+    { role: 'user', content: `자주 쓴 말: ${word}\n\n쓰인 문장:\n${sentences.map((x, i) => `${i + 1}. ${x}`).join('\n')}` },
+  ];
+}
+export function parseOptions(o: Record<string, unknown>, word: string) {
+  const seen = new Set<string>([word]);
+  return arr(o.options)
+    .map((x) => ({ word: s(x.word, 30), note: s(x.note, 120) }))
+    .filter((x) => x.word && !seen.has(x.word) && (seen.add(x.word), true))
+    .slice(0, 8);
+}
+export function defineMessages(word: string, sentence: string) {
+  return [
+    {
+      role: 'system',
+      content: `너는 ${MARK.define}다. 주어진 문장에서 쓰인 뜻으로 낱말을 한국어로 짧게(1~2문장) 풀이한다. 옛말 · 사투리 · 한자어면 그렇다고 밝힌다. 확실하지 않으면 「확실하지 않다」고 쓴다. 풀이만 쓰고 다른 말은 쓰지 않는다.`,
+    },
+    { role: 'user', content: `낱말: ${word}\n문장: ${sentence}` },
+  ];
 }
 
 // ---------------------------------------------------------------- 대사
@@ -283,6 +344,12 @@ export function fakeTool(sys: string, user: string): string | null {
     const q = user.split('원고:\n')[1]?.split(/[.!?\n]/).find((x) => x.trim().length > 4)?.trim() ?? '';
     return JSON.stringify({ plants: q ? [{ name: '가짜 복선', quote: q.slice(0, 20), why: '가짜: 뒤에서 다시 나올 것 같다.' }] : [], payoffs: [] });
   }
+  if (sys.includes(MARK.reader)) {
+    const q = user.split('원고:\n')[1]?.split(/[.!?\n]/).find((x) => x.trim().length > 4)?.trim() ?? '';
+    return JSON.stringify({ notes: q ? [{ kind: 'curious', quote: q.slice(0, 20), note: '가짜 독자: 여기서 다음이 궁금해졌다.' }] : [] });
+  }
+  if (sys.includes(MARK.synonyms)) return JSON.stringify({ options: [{ word: '가짜 말', note: '가짜: 차분한 문장에' }] });
+  if (sys.includes(MARK.define)) return '가짜 뜻풀이: 문장에서 쓰인 뜻이다.';
   if (sys.includes(MARK.questions)) return JSON.stringify({ questions: [{ q: '이 인물은 여기서 무엇을 원하지?', about: '주인공' }, { q: '이 장면이 끝날 때 무엇이 달라져야 하지?', about: '' }] });
   if (sys.includes(MARK.dialogue)) {
     const ids = [...user.matchAll(/⟦(\d+)⟧/g)].map((m) => m[1]);

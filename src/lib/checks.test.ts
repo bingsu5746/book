@@ -71,3 +71,61 @@ describe('복선 장부', () => {
     expect(clueMarker('payoff', '편지')).toBe('%%회수: 편지%%');
   });
 });
+
+import { matterNodes } from './matter';
+describe('앞붙이 · 뒷붙이', () => {
+  it('헌사는 앞에, 작가의 말 · 판권면은 뒤에. 글은 이스케이프', () => {
+    const r = matterNodes({ title: '새벽', author: '홍', meta: { matter: { dedication: '엄마에게 <3', afterword: '고마워요.', colophon: true } } }, { number: 2, date: '2026-11-17' });
+    expect(r.front).toEqual([{ id: 'm-dedication', kind: 'scene', depth: 0, title: '', body: '<div class="dedication"><p>엄마에게 &lt;3</p></div>' }]);
+    expect(r.back.map((n) => n.id)).toEqual(['m-afterword', 'm-colophon']);
+    expect(r.back[1].body).toBe('<div class="colophon"><p>새벽</p><p>지은이 홍</p><p>2판 · 2026-11-17</p></div>');
+  });
+  it('비어 있으면 아무것도 붙이지 않는다', () => {
+    expect(matterNodes({ title: 't', author: '', meta: {} }, { date: 'd' })).toEqual({ front: [], back: [] });
+  });
+});
+
+import { agesInChapter, agesSaid, birthYear, koreanNumber, yearIn } from './ages';
+describe('인물 나이', () => {
+  it('연도 · 태어난 해 · 한글 수', () => {
+    expect(yearIn('1998년 겨울')).toBe(1998);
+    expect(yearIn('제국력 312년')).toBe(312);
+    expect(yearIn('새벽')).toBeNull();
+    expect(birthYear({ '태어난 해': '1981' })).toBe(1981);
+    expect(birthYear({ 나이: '17 (1981년생)' })).toBe(1981);
+    expect(birthYear({ 나이: '17' })).toBeNull();
+    expect(koreanNumber('열일곱')).toBe(17);
+    expect(koreanNumber('스무')).toBe(20);
+    expect(koreanNumber('서른다섯')).toBe(35);
+  });
+  it('이름과 같은 문장의 「…살」만, 어긋나면 알린다', () => {
+    expect(agesSaid('홍설은 열일곱 살이었다. 민우는 스무 살.', ['홍설']).map((x) => x.age)).toEqual([17]);
+    const r = agesInChapter(1998, [{ name: '홍설', aliases: [], fields: { '태어난 해': '1981년' } }, { name: '민우', aliases: [], fields: {} }], '홍설은 열일곱 살이었다. 홍설은 스무 살 같았다.');
+    expect(r).toHaveLength(1);
+    expect(r[0].age).toBe(17);
+    expect(r[0].mismatch.map((m) => m.age)).toEqual([20]);
+  });
+});
+
+import { storyRoute } from './route';
+describe('이야기 이동 경로', () => {
+  it('장 순서대로, 같은 곳이 이어지면 한 점, 핀이 없는 장소는 따로', () => {
+    const r = storyRoute(
+      [
+        { id: 'a', title: '1장', place: '파빌리온' },
+        { id: 'b', title: '2장', place: '파빌리온' },
+        { id: 'c', title: '3장', place: '숲' },
+        { id: 'd', title: '4장', place: '' },
+        { id: 'e', title: '5장', place: '바다' },
+        { id: 'f', title: '6장', place: '정자' },
+      ],
+      [
+        { id: 'p1', x: 0.1, y: 0.2, entry: 'e1', label: '' },
+        { id: 'p2', x: 0.5, y: 0.5, entry: '', label: '숲' },
+      ],
+      [{ id: 'e1', name: '파빌리온', aliases: ['정자'] }],
+    );
+    expect(r.points.map((p) => `${p.pinId}:${p.chapters.map((c) => c.i).join(',')}`)).toEqual(['p1:1,2', 'p2:3', 'p1:6']);
+    expect(r.missing).toEqual([{ i: 5, title: '5장', place: '바다' }]);
+  });
+});

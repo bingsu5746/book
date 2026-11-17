@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../lib/api';
-import { charsLabel, Cover } from '../../lib/BookCard';
+import { charsLabel, Cover, coverUrl } from '../../lib/BookCard';
 import { Desk, Manuscript, Shelf, Spine } from './Bookcase';
 import type { CoverStyle } from '../../lib/cover';
 import { useSession } from '../../lib/session';
@@ -27,6 +27,8 @@ interface Shared {
   published: number;
   chars: number;
   stars: number | null;
+  cover_image?: number | null;
+  cover_mode?: string | null;
 }
 
 export async function importSeed(nickname: string) {
@@ -125,8 +127,8 @@ export function LibraryHome() {
   const prog = (key: string) => progress[key];
   // 이어 읽기: 가장 최근에 읽은 것
   const recent = [
-    ...live.map((b) => ({ key: `b:${b.id}`, title: b.title, author: b.author, color: b.color, seed: b.id, href: `#/read/${b.id}`, style: b.meta?.coverStyle as CoverStyle | undefined })),
-    ...shared.map((s) => ({ key: `e:${s.id}`, title: s.title, author: s.owner_name, color: s.color, seed: s.id, href: `#/edition/${s.edition_id}`, style: undefined as CoverStyle | undefined })),
+    ...live.map((b) => ({ key: `b:${b.id}`, title: b.title, author: b.author, color: b.color, seed: b.id, href: `#/read/${b.id}`, style: b.meta?.coverStyle as CoverStyle | undefined, image: coverUrl(b.id, b.meta) })),
+    ...shared.map((s) => ({ key: `e:${s.id}`, title: s.title, author: s.owner_name, color: s.color, seed: s.id, href: `#/edition/${s.edition_id}`, style: undefined as CoverStyle | undefined, image: coverUrl(s.id, { coverImage: s.cover_image, coverMode: s.cover_mode }) })),
   ]
     .filter((x) => prog(x.key) && (prog(x.key).f ?? 0) < 0.999)
     .sort((a, b) => prog(b.key).at - prog(a.key).at);
@@ -141,7 +143,7 @@ export function LibraryHome() {
       const b = live.find((x) => x.id === m[2]);
       if (!b) return null;
       const p = prog(`b:${b.id}`);
-      const base = { key: `b:${b.id}`, title: b.title, author: b.author, color: b.color, seed: b.id, style: b.meta?.coverStyle as CoverStyle | undefined, href, progress: p ?? null, source: { kind: 'book' as const, id: b.id } };
+      const base = { key: `b:${b.id}`, title: b.title, author: b.author, color: b.color, seed: b.id, style: b.meta?.coverStyle as CoverStyle | undefined, image: coverUrl(b.id, b.meta), href, progress: p ?? null, source: { kind: 'book' as const, id: b.id } };
       if (b.kind === 'write') {
         const blurb = String(b.meta.blurb ?? '').trim();
         const plot = String(b.meta.plot ?? '').trim();
@@ -176,7 +178,7 @@ export function LibraryHome() {
     }
     const sh = shared.find((x) => x.edition_id === m[2]);
     if (!sh) return null;
-    return { key: `e:${sh.id}`, title: sh.title, author: sh.owner_name, color: sh.color, seed: sh.id, href, progress: prog(`e:${sh.id}`) ?? null, source: { kind: 'edition', id: sh.edition_id }, facts: [`${sh.edition}판`, charsLabel(sh.chars), sh.stars ? `★ ${sh.stars.toFixed(1)}` : '', `${ago(sh.published)} 공유`] };
+    return { key: `e:${sh.id}`, title: sh.title, author: sh.owner_name, color: sh.color, seed: sh.id, image: coverUrl(sh.id, { coverImage: sh.cover_image, coverMode: sh.cover_mode }), href, progress: prog(`e:${sh.id}`) ?? null, source: { kind: 'edition', id: sh.edition_id }, facts: [`${sh.edition}판`, charsLabel(sh.chars), sh.stars ? `★ ${sh.stars.toFixed(1)}` : '', `${ago(sh.published)} 공유`] };
   };
   const onCardClick = (e: React.MouseEvent) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -229,7 +231,7 @@ export function LibraryHome() {
       {offline && <p className="note-box" style={{ marginBottom: 20 }}>인터넷에 연결되어 있지 않아 이 기기에 받아 둔 책만 보여요. 쓴 글은 기기에 저장했다가 연결되면 보내요.</p>}
       {cont && (
         <a className="hero" href={cont.href} style={{ textDecoration: 'none', color: 'inherit' }}>
-          <Cover title={cont.title} color={cont.color} seed={cont.seed} author={cont.author} style={cont.style} />
+          <Cover title={cont.title} color={cont.color} seed={cont.seed} author={cont.author} style={cont.style} image={cont.image} />
           <div className="grow">
             <p className="tiny muted" style={{ letterSpacing: '.1em' }}>
               이어 읽기

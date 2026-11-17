@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import { COVERS } from '../../lib/colors';
-import { Cover } from '../../lib/BookCard';
+import { Cover, coverUrl } from '../../lib/BookCard';
+import { shrinkImage } from '../../lib/image';
+import { readMatter } from '../../lib/matter';
 import { COVER_STYLES, type CoverStyle } from '../../lib/cover';
 import { go } from '../../lib/router';
 import { flatten } from '../../lib/store';
@@ -324,6 +326,16 @@ export function BookNotes({ book, entries, onSave }: { book: Book; entries: Entr
 // ---------------------------------------------------------------- 책 설정 · 공유
 export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Book; nodes: BookNode[]; onPatch: (p: Record<string, unknown>) => void; onWorldLinked: (id: string | null) => void }) {
   const [cmp, setCmp] = useState<{ id: string; number: number } | null>(null);
+  const [coverBusy, setCoverBusy] = useState(false);
+  // 앞붙이는 여기서 바로 바꾸고 서버로 보낸다 (응답을 기다리는 사이 다른 칸을 고쳐도 서로 덮어쓰지 않게)
+  const [matter, setMatterState] = useState(() => readMatter(book.meta));
+  const matterRef = useRef(matter);
+  const setMatter = (p: Partial<ReturnType<typeof readMatter>>) => {
+    const m = { ...matterRef.current, ...p };
+    matterRef.current = m;
+    setMatterState(m);
+    onPatch({ meta: { ...book.meta, matter: m } });
+  };
   const readers = useAsync(() => api<{ readers: { nickname: string; at: number; f: number; node_title: string }[] }>(`books/${book.id}/readers`), [book.id]);
   const worlds = useAsync(() => api<{ worlds: World[] }>('worlds'), []);
   const [editions, setEditions] = useState<{ id: string; number: number; note: string; created: number; chars: number }[] | null>(null);
@@ -370,9 +382,66 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
         </label>
         <div className="row" style={{ gap: 18, alignItems: 'flex-start' }}>
           <div style={{ width: 120, flex: 'none' }}>
-            <Cover title={book.title} author={book.author} color={book.color} seed={book.id} style={book.meta.coverStyle as CoverStyle | undefined} />
+            <Cover title={book.title} author={book.author} color={book.color} seed={book.id} style={book.meta.coverStyle as CoverStyle | undefined} image={coverUrl(book.id, book.meta)} />
           </div>
           <div className="stack grow" style={{ gap: 10 }}>
+            <div className="field">
+              그림 표지
+              <div className="row wrap">
+                {!!book.meta.coverImage && (
+                  <div className="seg">
+                    <button className={book.meta.coverMode !== 'text' ? 'on' : ''} onClick={() => onPatch({ meta: { ...book.meta, coverMode: 'image' } })}>
+                      그림
+                    </button>
+                    <button className={book.meta.coverMode === 'text' ? 'on' : ''} onClick={() => onPatch({ meta: { ...book.meta, coverMode: 'text' } })}>
+                      글자
+                    </button>
+                  </div>
+                )}
+                <label className="btn small">
+                  <Icon name="upload" size={14} />
+                  {coverBusy ? '올리는 중…' : book.meta.coverImage ? '다른 그림으로' : '그림 올리기'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    hidden
+                    disabled={coverBusy}
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!f) return;
+                      setCoverBusy(true);
+                      try {
+                        const img = await shrinkImage(f, 1400, 0.85);
+                        const r = await api<{ coverImage: number }>(`books/${book.id}/cover`, { method: 'PUT', body: { mime: img.mime, data: img.data } });
+                        onPatch({ meta: { ...book.meta, coverImage: r.coverImage, coverMode: 'image' } });
+                        toast('표지 그림을 바꿨어요');
+                      } catch (err) {
+                        toast((err as Error).message, 'err');
+                      } finally {
+                        setCoverBusy(false);
+                      }
+                    }}
+                  />
+                </label>
+                {!!book.meta.coverImage && (
+                  <button
+                    className="small ghost"
+                    onClick={async () => {
+                      if (!(await confirmBox('표지 그림을 지울까요?', { ok: '지우기', danger: true, detail: '글자 표지로 돌아가요.' }))) return;
+                      await api(`books/${book.id}/cover`, { method: 'DELETE' });
+                      const meta = { ...book.meta };
+                      delete meta.coverImage;
+                      delete meta.coverMode;
+                      onPatch({ meta });
+                    }}
+                  >
+                    그림 지우기
+                  </button>
+                )}
+              </div>
+              <span className="faint tiny">사진이나 그린 그림을 표지로. 「글자」를 고르면 아래 글자 표지를 써요. 서재의 책등은 표지 색을 따라요.</span>
+            </div>
             <div className="field">
               표지 모양
               <div className="seg">
@@ -394,6 +463,24 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
           </div>
         </div>
       </section>
+      {book.kind === 'write' && (
+        <section className="panel stack">
+          <h3 className="serif">앞붙이 · 뒷붙이</h3>
+          <p className="muted small">헌사는 책 맨 앞, 작가의 말 · 판권면은 맨 뒤에 붙어요. 리더 · 공유본 · 링크 · 전자책에 들어가고, 원고 목록에는 보이지 않아요. 공유본에는 새 판을 찍을 때 들어가요.</p>
+          <label className="field">
+            헌사 <span className="faint tiny">예: 엄마에게</span>
+            <textarea className="input serif" rows={2} defaultValue={matter.dedication} onBlur={(e) => e.target.value !== (matter.dedication ?? '') && setMatter({ dedication: e.target.value })} />
+          </label>
+          <label className="field">
+            작가의 말
+            <textarea className="input serif" rows={6} defaultValue={matter.afterword} onBlur={(e) => e.target.value !== (matter.afterword ?? '') && setMatter({ afterword: e.target.value })} />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={!!matter.colophon} onChange={(e) => setMatter({ colophon: e.target.checked })} />
+            판권면 넣기 (제목 · 지은이 · 판 · 날짜)
+          </label>
+        </section>
+      )}
       <section className="panel stack">
         <h3 className="serif">세계관</h3>
         {worlds.loading ? (

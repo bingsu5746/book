@@ -3958,3 +3958,78 @@ details.more > label.field {
     margin-left: 0;
   }
 }
+/* 앞붙이 · 뒷붙이, 그림 표지 */
+.dedication,
+.prose > .dedication:first-child {
+  text-align: center;
+  font-style: italic;
+  padding: 7em 0 0;
+}
+.dedication p,
+.colophon p {
+  text-indent: 0 !important;
+  text-align: center !important;
+}
+.colophon,
+.prose > .colophon:first-child {
+  font-size: 0.82em;
+  padding-top: 6em;
+  opacity: 0.8;
+}
+.cover.img {
+  padding: 0;
+  aspect-ratio: 0.69;
+  border-radius: 3px 6px 6px 3px;
+  overflow: hidden;
+  background: var(--soft);
+  box-shadow: 0 6px 18px -8px var(--shade);
+}
+.cover.img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ages summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.ages-warn {
+  color: var(--bad);
+}
+/* 지도: 이야기 이동 경로 */
+.route-line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.route-line polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 5;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+.route-step {
+  position: absolute;
+  transform: translate(-50%, -150%);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  pointer-events: auto;
+  white-space: nowrap;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.route-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
