@@ -13,7 +13,7 @@ export function Account() {
   const [theme, setTheme] = useState(local.get<string>('theme', 'auto'));
   const [pw, setPw] = useState({ current: '', password: '' });
   const [restoring, setRestoring] = useState('');
-  const [prefs, setPrefs] = useState<{ autoAnalysis?: boolean; [k: string]: unknown }>({});
+  const [prefs, setPrefs] = useState<{ autoAnalysis?: boolean; autoFill?: boolean; [k: string]: unknown }>({});
   useEffect(() => {
     api<{ prefs: Record<string, unknown> }>('prefs')
       .then((r) => setPrefs(r.prefs ?? {}))
@@ -75,6 +75,22 @@ export function Account() {
               </button>
             ))}
           </div>
+        </section>
+        <section className="panel stack">
+          <h3 className="serif">장 정보 AI 채우기</h3>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={prefs.autoFill !== false}
+              onChange={async (e) => {
+                const next = { ...prefs, autoFill: e.target.checked };
+                setPrefs(next);
+                await api('prefs', { method: 'PUT', body: { prefs: next } }).catch((x) => toast((x as Error).message, 'err'));
+              }}
+            />
+            장을 다 쓰고 다른 장으로 옮길 때 빈 장 정보를 AI 가 저절로 채우기
+          </label>
+          <p className="muted small">줄거리 · 시점 인물 · 장소 · 이야기 속 시간 · 꼬리표 중 비어 있는 칸만, 원고에 쓰인 것만 보고 채워요. 직접 쓴 칸은 건드리지 않아요. 글이 200자(공백 제외) 넘는 장만 해요. 꺼 두어도 집필실 ⋯ 메뉴 「장 정보 빈 칸 모두 AI 로 채우기」와 장 정보의 「빈 칸 AI 로 채우기」로 직접 채울 수 있어요.</p>
         </section>
         <section className="panel stack">
           <h3 className="serif">분석집</h3>

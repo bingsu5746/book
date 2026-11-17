@@ -17,6 +17,7 @@ import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views'
 import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
 import { PlanView } from './PlanView';
 import { beatAt } from '../../lib/beats';
+import { infoGaps, mergeInfo, shouldAutoFill, type ChapterInfo } from '../../lib/fillinfo';
 import { dictationSupported, startDictation } from '../../lib/dictate';
 import { JotPicker } from '../Jots';
 
@@ -282,21 +283,60 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
     await api(`nodes/${n.id}`, { method: 'PATCH', body: { synopsis: r.synopsis, meta } }).catch(() => {});
     return r.synopsis;
   };
-  // 장을 떠날 때: 줄거리가 비었거나(또는 AI 가 쓴 요약인데 원고가 많이 바뀌었으면) 저절로 요약
+  /** 장 정보 AI 채우기: 줄거리 · 시점 · 장소 · 시간 · 꼬리표 중 빈 칸만 */
+  const fillInfo = async (n: BookNode): Promise<string[]> => {
+    await saveBody(n.id, bookId, n.body ?? '', revs.current.get(n.id) ?? n.rev);
+    const ents = entriesOf(items);
+    const r = await api<{ info: ChapterInfo }>('ai/chapter-info', {
+      body: { node_id: n.id, people: ents.filter((e) => e.kind === 'character').map((e) => e.name), places: ents.filter((e) => e.kind === 'place').map((e) => e.name) },
+    });
+    // 기다리는 사이 사람이 고친 칸이 있을 수 있으니 지금 것으로 다시 맞춘다
+    const cur = dataRef.current?.nodes.find((x) => x.id === n.id) ?? n;
+    const { patch, filled } = mergeInfo(cur, r.info);
+    updateNode(n.id, patch);
+    await api(`nodes/${n.id}`, { method: 'PATCH', body: patch }).catch(() => {});
+    return filled;
+  };
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  // 계정 설정: 장 정보 AI 자동 채우기 (기본 켬)
+  const [autoFillOn, setAutoFillOn] = useState(true);
+  useEffect(() => {
+    api<{ prefs: { autoFill?: boolean } }>('prefs')
+      .then((r) => setAutoFillOn(r.prefs?.autoFill !== false))
+      .catch(() => {});
+  }, []);
+  // 장을 떠날 때: 빈 칸이 있으면(또는 AI 가 쓴 줄거리가 낡았으면) 저절로 채운다
   const prevSel = useRef<string | null>(null);
   useEffect(() => {
     const prev = prevSel.current;
     prevSel.current = sel?.id ?? null;
-    if (!prev || prev === sel?.id || data?.book.meta.autoSynopsis === false || !navigator.onLine) return;
+    if (!prev || prev === sel?.id || !autoFillOn || data?.book.meta.autoSynopsis === false || !navigator.onLine) return;
     const n = data?.nodes.find((x) => x.id === prev);
-    if (!n || n.deleted || n.kind === 'part' || n.kind === 'note') return;
-    const chars = charsNoSpace(n.body ?? '');
-    if (chars < 200) return;
-    const was = Number(n.meta.synopsisChars ?? 0);
-    const stale = n.meta.synopsisAi && was && Math.abs(chars - was) / was > 0.15;
-    if (n.synopsis.trim() && !stale) return;
-    void summarize(n).catch(() => {});
+    if (!n || n.deleted || !shouldAutoFill(n)) return;
+    void fillInfo(n).catch(() => {});
   }, [sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** 책 전체: 글이 있는 장마다 빈 칸 채우기 */
+  const [filling, setFilling] = useState<{ done: number; total: number } | null>(null);
+  const fillAll = async () => {
+    const todo = flatten(live).filter((n) => n.kind !== 'part' && n.kind !== 'note' && charsNoSpace((n.body ?? '').replace(/%%[\s\S]*?%%/g, '')) >= 80 && infoGaps(n).length);
+    if (!todo.length) return toast('채울 장이 없어요. (글이 80자 넘는 장 중 빈 칸이 있는 장만 채워요)');
+    if (!(await confirmBox(`장 ${todo.length}개의 빈 칸을 AI 로 채울까요?`, { ok: '채우기', detail: `줄거리 · 시점 인물 · 장소 · 이야기 속 시간 · 꼬리표 중 비어 있는 칸만 채우고, 직접 쓴 칸은 그대로 둬요. 장마다 AI 를 한 번 써요(하루 60번까지).` }))) return;
+    setFilling({ done: 0, total: todo.length });
+    let ok = 0;
+    for (let i = 0; i < todo.length; i++) {
+      try {
+        const cur = dataRef.current?.nodes.find((x) => x.id === todo[i].id) ?? todo[i];
+        if ((await fillInfo(cur)).length) ok++;
+      } catch (e) {
+        toast(`${todo[i].title || '제목 없는 장'}: ${(e as Error).message}`, 'err');
+        if (/하루|다 썼어요|AI 를 쓸 수 없/.test((e as Error).message)) break;
+      }
+      setFilling({ done: i + 1, total: todo.length });
+    }
+    setFilling(null);
+    toast(`장 ${ok}개를 채웠어요.`);
+  };
 
   // 아직 아무것도 안 쓴 책은 「구상」부터
   const planChecked = useRef(false);
@@ -470,9 +510,14 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   {prefs.side ? '곁 패널 숨기기' : '곁 패널 (장 정보 · 세계관 · 기록 …)'}
                 </button>
               )}
-              <button onClick={() => (close(), patchBook({ meta: { ...book.meta, autoSynopsis: book.meta.autoSynopsis === false } }))}>
-                {book.meta.autoSynopsis === false ? '줄거리 AI 요약 저절로 켜기' : '줄거리 AI 요약 저절로 끄기'}
+              <button disabled={!!filling} onClick={() => (close(), void fillAll())}>
+                {filling ? `장 정보 채우는 중… ${filling.done}/${filling.total}` : '장 정보 빈 칸 모두 AI 로 채우기'}
               </button>
+              {autoFillOn && (
+                <button onClick={() => (close(), patchBook({ meta: { ...book.meta, autoSynopsis: book.meta.autoSynopsis === false } }))}>
+                  {book.meta.autoSynopsis === false ? '이 책도 장 정보 저절로 채우기' : '이 책은 장 정보 저절로 채우지 않기'}
+                </button>
+              )}
               <hr />
               <button onClick={() => (close(), setPrefs({ focus: !prefs.focus }))}>{prefs.focus ? '집중 모드 끄기' : '집중 모드 (지금 문단만)'}</button>
               <button onClick={() => (close(), setPrefs({ typewriter: !prefs.typewriter }))}>{prefs.typewriter ? '타자기 모드 끄기' : '타자기 모드 (쓰는 줄을 가운데)'}</button>
@@ -658,7 +703,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             }}
           />
         )}
-        {view === 'stats' && <BookStats book={book} nodes={live} onPatchBook={patchBook} />}
+        {view === 'stats' && <BookStats book={book} nodes={live} onPatchBook={patchBook} onPatchNode={patchNode} />}
         {view === 'notes' && <BookNotes book={book} entries={refs} onSave={(notes) => patchBook({ notes })} />}
         {view === 'settings' && (
           <BookSettings
@@ -691,6 +736,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
           }}
           onOpenWorld={() => setView('settings')}
           summarize={summarize}
+          fillInfo={fillInfo}
         />
       )}
     </div>

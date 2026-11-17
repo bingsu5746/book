@@ -9,6 +9,7 @@ import { STATUS_LABEL, type BookNode, type Status } from '../../lib/types';
 import { confirmBox, Icon, Modal, promptBox, Spinner, toast } from '../../lib/ui';
 import { entriesOf, fieldsFor, kindLabel, mentionedIn, type Entry, type WEvent, type WItem } from '../../lib/world';
 import type { EditorHandle } from './Editor';
+import { infoGaps } from '../../lib/fillinfo';
 
 export type SideTab = 'info' | 'world' | 'spell' | 'history' | 'revise' | 'notes';
 const LABELS = ['', '#c26b4a', '#d9a441', '#3f8a6c', '#4f6fa8', '#8a5ca8', '#77736b'];
@@ -26,6 +27,7 @@ export function SidePanel({
   bookId,
   onOpenWorld,
   summarize,
+  fillInfo,
 }: {
   tab: SideTab;
   setTab: (t: SideTab) => void;
@@ -39,6 +41,7 @@ export function SidePanel({
   bookId: string;
   onOpenWorld: () => void;
   summarize: (n: BookNode) => Promise<string>;
+  fillInfo: (n: BookNode) => Promise<string[]>;
 }) {
   return (
     <aside className="side" aria-label="곁 패널">
@@ -60,7 +63,7 @@ export function SidePanel({
       </div>
       <div className="side-body">
         {!node && <p className="muted small">왼쪽에서 장을 골라 주세요.</p>}
-        {node && tab === 'info' && <Info node={node} items={items} onPatch={onPatch} summarize={summarize} />}
+        {node && tab === 'info' && <Info node={node} items={items} onPatch={onPatch} summarize={summarize} fillInfo={fillInfo} />}
         {node && tab === 'world' && <WorldTab worldId={worldId} items={items} body={body} editor={editor} onOpenWorld={onOpenWorld} nodeId={node.id} />}
         {node && tab === 'spell' && <SpellPanel key={node.id} bookId={bookId} body={body} editor={editor} />}
         {node && tab === 'history' && <History node={node} body={body} onRestore={onRestore} />}
@@ -71,7 +74,7 @@ export function SidePanel({
   );
 }
 
-function Info({ node, items, onPatch, summarize }: { node: BookNode; items: WItem[]; onPatch: (p: Partial<BookNode>) => void; summarize: (n: BookNode) => Promise<string> }) {
+function Info({ node, items, onPatch, summarize, fillInfo }: { node: BookNode; items: WItem[]; onPatch: (p: Partial<BookNode>) => void; summarize: (n: BookNode) => Promise<string>; fillInfo: (n: BookNode) => Promise<string[]> }) {
   const [syn, setSyn] = useState(node.synopsis);
   const [aiBusy, setAiBusy] = useState(false);
   const [memo, setMemo] = useState(node.meta.notes ?? '');
@@ -82,7 +85,12 @@ function Info({ node, items, onPatch, summarize }: { node: BookNode; items: WIte
   useEffect(() => setSyn(node.synopsis), [node.synopsis]); // eslint-disable-line react-hooks/exhaustive-deps
   const people = entriesOf(items).filter((e) => e.kind === 'character');
   const places = entriesOf(items).filter((e) => e.kind === 'place');
-  const meta = (k: string, v: unknown) => onPatch({ meta: { ...node.meta, [k]: v } });
+  const aiSet = new Set<string>((node.meta.infoAi as string[] | undefined) ?? []);
+  // 사람이 고친 칸은 더 이상 「AI 가 씀」이 아니다
+  const meta = (k: string, v: unknown) => onPatch({ meta: { ...node.meta, [k]: v, infoAi: [...aiSet].filter((x) => x !== k) } });
+  const ai = (k: string) => (aiSet.has(k) ? <span className="faint"> · AI</span> : null);
+  const gaps = infoGaps(node).length;
+  const [fillBusy, setFillBusy] = useState(false);
   return (
     <>
       <div className="field reveal-wrap">
@@ -120,6 +128,25 @@ function Info({ node, items, onPatch, summarize }: { node: BookNode; items: WIte
       </label>
       <details className="more">
         <summary>세부 정보 · 색 · 목표 · 시점 · 장소 · 메모</summary>
+        {gaps > 0 && (
+          <button
+            className="small"
+            disabled={fillBusy}
+            onClick={async () => {
+              setFillBusy(true);
+              try {
+                const f = await fillInfo(node);
+                toast(f.length ? `${f.join(' · ')}을(를) 채웠어요.` : '원고에서 더 채울 만한 것을 찾지 못했어요.');
+              } catch (e) {
+                toast((e as Error).message, 'err');
+              } finally {
+                setFillBusy(false);
+              }
+            }}
+          >
+            {fillBusy ? 'AI 가 원고를 읽는 중…' : '빈 칸 AI 로 채우기'}
+          </button>
+        )}
       <div className="field">
         색 표시
         <div className="row">
@@ -130,26 +157,26 @@ function Info({ node, items, onPatch, summarize }: { node: BookNode; items: WIte
       </div>
       <label className="field">
         이 칸 목표 글자 (공백 제외)
-        <input className="input" type="number" min={0} step={500} defaultValue={Number(node.meta.target) || ''} key={`tg2${node.id}`} onBlur={(e) => +e.target.value !== (Number(node.meta.target) || 0) && meta('target', +e.target.value || 0)} />
+        <input className="input" type="number" min={0} step={500} defaultValue={Number(node.meta.target) || ''} key={`tg2${node.id}:${Number(node.meta.target) || 0}`} onBlur={(e) => +e.target.value !== (Number(node.meta.target) || 0) && meta('target', +e.target.value || 0)} />
       </label>
       <label className="field">
-        시점 인물
-        <input className="input" list="dl-people" defaultValue={node.meta.pov ?? ''} key={`pov${node.id}`} onBlur={(e) => e.target.value !== (node.meta.pov ?? '') && meta('pov', e.target.value)} />
+        <span>시점 인물{ai('pov')}</span>
+        <input className="input" list="dl-people" defaultValue={node.meta.pov ?? ''} key={`pov${node.id}:${node.meta.pov ?? ''}`} onBlur={(e) => e.target.value !== (node.meta.pov ?? '') && meta('pov', e.target.value)} />
       </label>
       <label className="field">
-        장소
-        <input className="input" list="dl-places" defaultValue={node.meta.place ?? ''} key={`pl${node.id}`} onBlur={(e) => e.target.value !== (node.meta.place ?? '') && meta('place', e.target.value)} />
+        <span>장소{ai('place')}</span>
+        <input className="input" list="dl-places" defaultValue={node.meta.place ?? ''} key={`pl${node.id}:${node.meta.place ?? ''}`} onBlur={(e) => e.target.value !== (node.meta.place ?? '') && meta('place', e.target.value)} />
       </label>
       <label className="field">
-        이야기 속 시간
-        <input className="input" placeholder="예: 꿈속 오전 8시 / 현실 2년 차 봄" defaultValue={node.meta.time ?? ''} key={`tm${node.id}`} onBlur={(e) => e.target.value !== (node.meta.time ?? '') && meta('time', e.target.value)} />
+        <span>이야기 속 시간{ai('time')}</span>
+        <input className="input" placeholder="예: 꿈속 오전 8시 / 현실 2년 차 봄" defaultValue={node.meta.time ?? ''} key={`tm${node.id}:${node.meta.time ?? ''}`} onBlur={(e) => e.target.value !== (node.meta.time ?? '') && meta('time', e.target.value)} />
       </label>
       <label className="field">
-        꼬리표 (쉼표로 나눔)
+        <span>꼬리표 (쉼표로 나눔){ai('tags')}</span>
         <input
           className="input"
           defaultValue={(node.meta.tags ?? []).join(', ')}
-          key={`tg${node.id}`}
+          key={`tg${node.id}:${(node.meta.tags ?? []).join()}`}
           onBlur={(e) => {
             const tags = e.target.value
               .split(',')

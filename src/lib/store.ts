@@ -151,8 +151,8 @@ export async function uploadNodes(bookId: string, nodes: DraftNode[], onProgress
   return map;
 }
 
-export async function createBookFrom(input: { title: string; author?: string; kind: 'write' | 'read'; nodes: DraftNode[]; notes?: string; meta?: Record<string, unknown>; color?: string }, onProgress?: (d: number, t: number) => void): Promise<Book> {
-  const { book } = await api<{ book: Book }>('books', { body: { title: input.title, author: input.author ?? '', kind: input.kind, notes: input.notes ?? '', meta: input.meta ?? {}, color: input.color ?? '' } });
+export async function createBookFrom(input: { title: string; author?: string; kind: 'write' | 'read'; nodes: DraftNode[]; notes?: string; meta?: Record<string, unknown>; color?: string; goal_chars?: number }, onProgress?: (d: number, t: number) => void): Promise<Book> {
+  const { book } = await api<{ book: Book }>('books', { body: { title: input.title, author: input.author ?? '', kind: input.kind, notes: input.notes ?? '', meta: input.meta ?? {}, color: input.color ?? '', goal_chars: input.goal_chars ?? 0 } });
   await uploadNodes(book.id, input.nodes, onProgress);
   return book;
 }

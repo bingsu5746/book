@@ -116,3 +116,12 @@ describe('분석집', () => {
     expect(cleanSection('## 인물 분석\n\n### 홍설\n내용')).toBe('### 홍설\n내용');
   });
 });
+
+import { parseInfo } from './ai';
+describe('장 정보 답 읽기', () => {
+  it('JSON 앞뒤 글을 걷어 내고 칸을 다듬는다', () => {
+    const r = parseInfo('여기요:\n```json\n{"synopsis":"- 홍설이 깬다.","pov":" 홍설 ","place":"","time":"새벽","tags":["#꿈","꿈","기억"]}\n```');
+    expect(r).toEqual({ synopsis: '홍설이 깬다.', pov: '홍설', place: '', time: '새벽', tags: ['꿈', '기억'] });
+    expect(parseInfo('모르겠어요')).toBeNull();
+  });
+});

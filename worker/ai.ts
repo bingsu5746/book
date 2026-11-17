@@ -60,3 +60,46 @@ export function cleanSynopsis(raw: string): string {
     .trim()
     .slice(0, 600);
 }
+
+// ---- 장 정보 채우기: 줄거리 · 시점 인물 · 장소 · 이야기 속 시간 · 꼬리표를 한 번에 ----
+export interface ChapterInfo {
+  synopsis: string;
+  pov: string;
+  place: string;
+  time: string;
+  tags: string[];
+}
+export const INFO_MARK = '장 정보를 채우는 편집자';
+
+export function infoMessages(title: string, body: string, people: string[], places: string[]) {
+  const { text } = clip(body);
+  const names = [people.length ? `세계관의 인물: ${people.slice(0, 80).join(', ')}` : '', places.length ? `세계관의 장소: ${places.slice(0, 80).join(', ')}` : ''].filter(Boolean).join('\n');
+  return [
+    {
+      role: 'system',
+      content:
+        `너는 소설 원고의 ${INFO_MARK}다. 주어진 원고에 실제로 쓰인 것만 근거로 아래 JSON 하나만 출력한다. 다른 글은 쓰지 않는다.\n` +
+        '{"synopsis": "이 장에서 실제로 일어난 사건 2~4문장, 한국어 평서문(-다)", "pov": "이 장을 보고 말하는 시점 인물의 이름 (1인칭 화자면 그 인물 이름, 3인칭 전지적이거나 알 수 없으면 빈 글)", "place": "이 장의 주된 장소 (여러 곳이면 가장 중요한 곳 하나, 없으면 빈 글)", "time": "이야기 속 시간 (원고에 드러난 표현 그대로, 예: 새벽, 사흘 뒤, 겨울 저녁. 없으면 빈 글)", "tags": ["이 장을 나타내는 짧은 낱말 2~5개"]}\n' +
+        '원고에 드러나지 않은 것은 추측하지 말고 빈 글로 둔다. 인물 · 장소 이름은 원고에 나온 그대로 쓰고, 세계관 목록에 같은 대상이 있으면 그 이름으로 쓴다. 해석 · 평가 · 앞으로의 전개 추측은 쓰지 않는다.',
+    },
+    { role: 'user', content: `장 제목: ${title || '(없음)'}\n${names ? `\n${names}\n` : ''}\n원고:\n${text}` },
+  ];
+}
+
+const s = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+
+/** 모델 답에서 JSON 을 꺼내 장 정보로. 못 읽으면 null */
+export function parseInfo(raw: string): ChapterInfo | null {
+  const a = raw.indexOf('{');
+  const z = raw.lastIndexOf('}');
+  if (a < 0 || z <= a) return null;
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(raw.slice(a, z + 1));
+  } catch {
+    return null;
+  }
+  if (!o || typeof o !== 'object') return null;
+  const tags = Array.isArray(o.tags) ? [...new Set(o.tags.map((t) => s(t, 20).replace(/^#/, '')).filter(Boolean))].slice(0, 5) : [];
+  return { synopsis: cleanSynopsis(s(o.synopsis, 800)), pov: s(o.pov, 40), place: s(o.place, 60), time: s(o.time, 60), tags };
+}

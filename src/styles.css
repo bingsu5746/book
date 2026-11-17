@@ -3167,3 +3167,174 @@ details.more > label.field {
   font-size: 0.85em;
   opacity: 0.6;
 }
+
+/* ---------- 목표 분량 고르기 ---------- */
+.goal-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.goal-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.goal-opt {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  white-space: normal;
+  text-align: left;
+  color: var(--text);
+}
+.goal-opt b {
+  font-weight: 600;
+  font-size: 14px;
+}
+.goal-opt.on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* ---------- 책 꺼내 보기 ---------- */
+.card .thumb.taken {
+  visibility: hidden;
+}
+.sheet-back {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg);
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 48px 16px 64px;
+  animation: sheet-fade 0.3s ease both;
+}
+.sheet-back.closing {
+  animation: sheet-out 0.42s ease both;
+}
+@keyframes sheet-fade {
+  from {
+    background: transparent;
+  }
+}
+@keyframes sheet-out {
+  to {
+    background: transparent;
+  }
+}
+.sheet {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: fit-content;
+}
+.sheet-x {
+  position: absolute;
+  top: -8px;
+  right: 0;
+}
+.sheet-cover {
+  width: 220px;
+  border-radius: 4px 8px 8px 4px;
+  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  will-change: transform;
+}
+.sheet-cover .cover {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 3;
+}
+.sheet-cover .cover svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.sheet-body {
+  width: 100%;
+  margin-top: 28px;
+  text-align: center;
+}
+.sheet-body h2 {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.sheet-body > .muted {
+  margin-top: 4px;
+}
+.sheet-facts {
+  margin-top: 8px;
+}
+.sheet-prog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 14px auto 0;
+  max-width: 260px;
+}
+.sheet-prog .meter {
+  width: 100%;
+}
+.sheet-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin: 22px 0 8px;
+}
+.sheet-body section {
+  text-align: left;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  margin-top: 22px;
+}
+.sheet-body h3 {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--faint);
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+.sheet-text {
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+.sheet-body blockquote {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.9;
+  color: var(--text);
+}
+.sheet-toc {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  line-height: 1.9;
+  font-size: 14px;
+  color: var(--muted);
+  columns: 2;
+  column-gap: 24px;
+}
+.sheet-toc li.part {
+  color: var(--text);
+  font-weight: 600;
+  break-after: avoid;
+}
+.sheet-toc li.part:not(:first-child) {
+  margin-top: 6px;
+}
+@media (max-width: 560px) {
+  .sheet-cover {
+    width: 170px;
+  }
+  .sheet-toc {
+    columns: 1;
+  }
+}

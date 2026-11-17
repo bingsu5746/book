@@ -14,7 +14,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { charsNoSpace, cutText, inviteOk, Limiter, passwordProblem, readCookie, COOKIE_NAME } from './security';
 import { gutenbergFile, gutenbergSearch, wikisourcePage, wikisourceSearch } from './external';
 import { flattenTree, snippets } from './util';
-import { cleanSynopsis, FALLBACK, MODEL, modelInput, readOutput, synopsisMessages } from './ai';
+import { cleanSynopsis, FALLBACK, infoMessages, INFO_MARK, MODEL, modelInput, parseInfo, readOutput, synopsisMessages } from './ai';
 import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, SECTIONS, sectionMessages, type ChapterNote } from './analysis';
 /** 한 사람이 하루에 시작할 수 있는 분석집 수 */
 const ANALYSIS_DAILY = 5;
@@ -287,6 +287,7 @@ export class Library extends DurableObject<Env> {
       return json({ ok: true });
     }
     if (path === 'ai/synopsis' && method === 'POST') return this.aiSynopsis(user, b);
+    if (path === 'ai/chapter-info' && method === 'POST') return this.aiChapterInfo(user, b);
     // 아이디어 수첩
     if (path === 'jots' && method === 'GET') return json({ jots: this.rows('SELECT id, text, done, created, updated FROM jots WHERE user_id = ? ORDER BY done, updated DESC LIMIT 1000', user.id) });
     if (path === 'jots' && method === 'POST') {
@@ -1059,6 +1060,26 @@ export class Library extends DurableObject<Env> {
     return json({ synopsis: text, left: AI_DAILY - used - 1 });
   }
 
+  /** 장 정보 채우기: 원고를 읽고 줄거리 · 시점 · 장소 · 시간 · 꼬리표를 돌려준다 (저장은 쓰는 쪽이 빈 칸만) */
+  private async aiChapterInfo(user: UserRow, b: Body) {
+    const n = this.ownNode(user, String(b.node_id ?? ''));
+    if (n.body.replace(/%%[\s\S]*?%%/g, '').replace(/\s/g, '').length < 80) return fail('채우기엔 글이 너무 짧아요.');
+    if (!this.env.AI && this.env.FAKE_AI !== '1') return fail('AI 를 쓸 수 없어요. (서버에 AI 연결이 없음)', 503);
+    const day = new Date().toISOString().slice(0, 10);
+    const used = Number(this.one('SELECT n FROM ai_usage WHERE user_id = ? AND day = ?', user.id, day)?.n ?? 0);
+    if (used >= AI_DAILY) return fail(`오늘 AI 를 ${AI_DAILY}번 다 썼어요. 내일 다시 해 주세요.`, 429);
+    const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => str(x, 40).trim()).filter(Boolean).slice(0, 80) : []);
+    let info = null;
+    try {
+      info = parseInfo(await this.callAI(infoMessages(n.title, n.body, names(b.people), names(b.places)), 900));
+    } catch (e) {
+      console.error('ai info', e instanceof Error ? e.message : String(e));
+    }
+    if (!info) return fail('AI 가 장 정보를 만들지 못했어요. 잠시 뒤 다시 해 주세요.', 502);
+    this.sql.exec('INSERT INTO ai_usage (user_id, day, n) VALUES (?, ?, 1) ON CONFLICT (user_id, day) DO UPDATE SET n = n + 1', user.id, day);
+    return json({ info, left: AI_DAILY - used - 1 });
+  }
+
   // ---------------------------------------------------------------- 분석집 (작품 해설)
   private autoAnalysisOn(user: UserRow): boolean {
     const p = parseJson(this.one('SELECT data FROM prefs WHERE user_id = ?', user.id)?.data) as { autoAnalysis?: boolean };
@@ -1115,7 +1136,9 @@ export class Library extends DurableObject<Env> {
   private async callAI(messages: unknown[], max: number): Promise<string> {
     if (this.env.FAKE_AI === '1') {
       // 개발용 (wrangler dev 에서는 Workers AI 를 부를 수 없다): 모양만 맞는 가짜 답
-      const isChapter = String((messages[0] as { content?: string })?.content ?? '').includes('메모를 남긴다');
+      const sys = String((messages[0] as { content?: string })?.content ?? '');
+      if (sys.includes(INFO_MARK)) return JSON.stringify({ synopsis: '가짜 요약: 이 장에서 일이 일어난다.', pov: '홍설', place: '파빌리온', time: '오전 8시', tags: ['꿈', '시작'] });
+      const isChapter = sys.includes('메모를 남긴다');
       return isChapter ? JSON.stringify({ summary: '가짜 요약: 이 장에서 일이 일어난다.', characters: [{ name: '홍설', doing: '꽃밭에 간다', traits: ['조용함'] }], events: [{ what: '꽃밭에 감', why: '시작' }], objects: [{ name: '거울', meaning: '기억' }], places: [{ name: '파빌리온', meaning: '쉼' }], motifs: ['오전 8시'], lines: ['홍설은 꽃밭에서 눈을 떴다.'] }) : '가짜 해설 문단입니다. [1] 장을 근거로 씁니다.';
     }
     if (!this.env.AI) throw new Error('AI 연결이 없어요');
@@ -1301,7 +1324,7 @@ export class Library extends DurableObject<Env> {
     const owner = this.one('SELECT nickname FROM users WHERE id = ?', book.owner);
     return json({
       edition: e,
-      book: { id: book.id, title: book.title, owner: book.owner, owner_name: owner?.nickname ?? '', world_id: book.share_world ? book.world_id : null, mine: book.owner === user.id },
+      book: { id: book.id, title: book.title, owner: book.owner, owner_name: owner?.nickname ?? '', world_id: book.share_world ? book.world_id : null, mine: book.owner === user.id, blurb: str((parseJson(book.meta) as { blurb?: unknown }).blurb, 3000) },
       nodes,
       editions,
       likes,

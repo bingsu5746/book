@@ -7,6 +7,7 @@ export interface DraftNode {
   body: string;
   sort: number;
   synopsis?: string;
+  meta?: Record<string, unknown>;
 }
 export interface SplitResult {
   title: string;

@@ -12,6 +12,8 @@ import type { World } from '../../lib/world';
 import { Editor, type EntryRef } from './Editor';
 import { EditionDiff } from './EditionDiff';
 import { AnalysisPanel } from './AnalysisPanel';
+import { GoalPicker } from './GoalPicker';
+import { distributeGoal, goalLeaves, perPage } from '../../lib/goals';
 
 const STATUS_COLOR: Record<string, string> = { '': 'var(--line-strong)', idea: '#b9b2a3', draft: '#d9a441', revise: '#c26b4a', done: '#3f8a6c' };
 
@@ -191,7 +193,15 @@ export function Heatmap({ days, weeks = 26 }: { days: Map<string, number>; weeks
   );
 }
 
-export function BookStats({ book, nodes, onPatchBook }: { book: Book; nodes: BookNode[]; onPatchBook: (p: Record<string, unknown>) => void }) {
+export function BookStats({ book, nodes, onPatchBook, onPatchNode }: { book: Book; nodes: BookNode[]; onPatchBook: (p: Record<string, unknown>) => void; onPatchNode: (id: string, p: Partial<BookNode>) => void }) {
+  const per = perPage(nodes);
+  const leaves = goalLeaves(nodes);
+  const hasTargets = leaves.some((n) => Number(n.meta.target) > 0);
+  const spread = (keep: boolean) => {
+    const m = distributeGoal(leaves, book.goal_chars, keep);
+    for (const n of leaves) if (m.has(n.id) && m.get(n.id) !== Number(n.meta.target || 0)) onPatchNode(n.id, { meta: { ...n.meta, target: m.get(n.id) } });
+    toast(`${m.size}칸에 목표를 나눴어요. 장 정보 「이 칸 목표 글자」에서 고칠 수 있어요.`);
+  };
   const { data } = useAsync(() => api<{ days: { day: string; chars: number }[] }>('stats'), []);
   const days = useMemo(() => new Map((data?.days ?? []).map((d) => [d.day, d.chars])), [data]);
   const text = nodes.filter((n) => n.kind !== 'note' && n.kind !== 'part');
@@ -234,11 +244,21 @@ export function BookStats({ book, nodes, onPatchBook }: { book: Book; nodes: Boo
       </div>
       <section className="panel stack">
         <h3 className="serif">목표</h3>
+        <GoalPicker key={book.goal_chars} value={book.goal_chars} per={per.v} own={per.own} onChange={(v) => v !== book.goal_chars && onPatchBook({ goal_chars: v })} />
+        {book.goal_chars > 0 && !!leaves.length && (
+          <div className="row wrap">
+            <button className="small" onClick={() => spread(hasTargets)}>
+              {hasTargets ? '목표 없는 칸에 남은 분량 나누기' : `장 ${leaves.length}칸에 목표 나누기`}
+            </button>
+            {hasTargets && (
+              <button className="small ghost" onClick={() => spread(false)}>
+                모두 다시 나누기
+              </button>
+            )}
+            <span className="faint tiny">쪽 줄거리가 많은 장에 더 많이 나눠요.</span>
+          </div>
+        )}
         <div className="row wrap" style={{ gap: 12 }}>
-          <label className="field">
-            책 목표 분량 (글자)
-            <input className="input" type="number" min={0} step={1000} defaultValue={book.goal_chars || ''} onBlur={(e) => onPatchBook({ goal_chars: +e.target.value || 0 })} />
-          </label>
           <label className="field">
             마감일
             <input className="input" type="date" defaultValue={book.deadline ?? ''} onBlur={(e) => onPatchBook({ deadline: e.target.value || null })} />
@@ -341,6 +361,10 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
         <label className="field">
           지은이 (표지에 보이는 이름)
           <input className="input" defaultValue={book.author} onBlur={(e) => e.target.value !== book.author && onPatch({ author: e.target.value })} />
+        </label>
+        <label className="field">
+          책 소개 <span className="faint tiny">서재에서 책을 누르면 · 친구가 볼 때 보여요</span>
+          <textarea className="input" rows={3} defaultValue={String(book.meta.blurb ?? '')} placeholder="뒤표지에 쓰는 짧은 소개" onBlur={(e) => e.target.value !== String(book.meta.blurb ?? '') && onPatch({ meta: { ...book.meta, blurb: e.target.value } })} />
         </label>
         <div className="row" style={{ gap: 18, alignItems: 'flex-start' }}>
           <div style={{ width: 120, flex: 'none' }}>

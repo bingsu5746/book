@@ -11,6 +11,7 @@ import { ago } from '../../lib/text';
 import type { Book } from '../../lib/types';
 import { confirmBox, Empty, Icon, Menu, Spinner, toast, useAsync } from '../../lib/ui';
 import { ImportDialog } from './ImportDialog';
+import { BookSheet, type SheetBook } from './BookSheet';
 import { go } from '../../lib/router';
 
 interface Shared {
@@ -47,6 +48,7 @@ export function LibraryHome() {
   const [weekRead, setWeekRead] = useState(0);
   const [backupHidden, setBackupHidden] = useState(false);
   const [readFilter, setReadFilter] = useState<'' | 'want' | 'reading' | 'done'>('');
+  const [sheet, setSheet] = useState<{ book: SheetBook; from: HTMLElement | null } | null>(null);
   useEffect(() => {
     api<{ read: { day: string; secs: number }[] }>('stats')
       .then((r) => {
@@ -126,8 +128,39 @@ export function LibraryHome() {
   const cont = recent[0];
   const hasSeed = books.some((b) => b.meta?.template === 'seed-dawn');
 
+  /** 책 카드를 누르면 바로 펼치지 않고 「꺼내 보기」 */
+  const sheetFor = (href: string): SheetBook | null => {
+    const m = href.match(/^#\/(read|edition)\/([a-z0-9]+)$/);
+    if (!m) return null;
+    if (m[1] === 'read') {
+      const b = live.find((x) => x.id === m[2]);
+      if (!b) return null;
+      const p = prog(`b:${b.id}`);
+      const base = { key: `b:${b.id}`, title: b.title, author: b.author, color: b.color, seed: b.id, style: b.meta?.coverStyle as CoverStyle | undefined, href, progress: p ?? null, source: { kind: 'book' as const, id: b.id } };
+      if (b.kind === 'write') {
+        const blurb = String(b.meta.blurb ?? '').trim();
+        const plot = String(b.meta.plot ?? '').trim();
+        return { ...base, writeHref: `#/write/${b.id}`, blurb: blurb || plot, blurbLabel: blurb ? '소개' : '구상 줄거리 · 나만 보여요', facts: [charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', `${ago(b.updated)} 고침`] };
+      }
+      const st = b.meta.readStatus === 'done' ? `다 읽음${b.meta.finishedAt ? ` ${b.meta.finishedAt}` : ''}` : b.meta.readStatus === 'want' ? '읽고 싶어요' : '';
+      return { ...base, blurb: String(b.meta.blurb ?? '').trim(), facts: [st, b.meta.readStars ? '★'.repeat(b.meta.readStars) : '', charsLabel(b.total_chars)] };
+    }
+    const sh = shared.find((x) => x.edition_id === m[2]);
+    if (!sh) return null;
+    return { key: `e:${sh.id}`, title: sh.title, author: sh.owner_name, color: sh.color, seed: sh.id, href, progress: prog(`e:${sh.id}`) ?? null, source: { kind: 'edition', id: sh.edition_id }, facts: [`${sh.edition}판`, charsLabel(sh.chars), sh.stars ? `★ ${sh.stars.toFixed(1)}` : '', `${ago(sh.published)} 공유`] };
+  };
+  const onCardClick = (e: React.MouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a.card');
+    if (!a) return;
+    const book = sheetFor(a.getAttribute('href') ?? '');
+    if (!book) return;
+    e.preventDefault();
+    setSheet({ book, from: a.querySelector<HTMLElement>('.thumb') });
+  };
+
   return (
-    <>
+    <div onClick={onCardClick}>
       <div className="page-head">
         <div>
           <h1>서재</h1>
@@ -401,6 +434,7 @@ export function LibraryHome() {
           }}
         />
       )}
-    </>
+      {sheet && <BookSheet book={sheet.book} from={sheet.from} onClose={() => setSheet(null)} />}
+    </div>
   );
 }

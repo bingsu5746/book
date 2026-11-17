@@ -133,7 +133,7 @@ export function App() {
   const [top = 'library', a, b] = parts;
   let full: React.ReactNode = null;
   if (top === 'read' && a) full = <BookReader bookId={a} nodeId={b} at={query.get('at')} find={query.get('find')} />;
-  if (top === 'write' && a) full = <Workspace bookId={a} nodeId={b} />;
+  if (top === 'write' && a) full = <Workspace key={a} bookId={a} nodeId={b} />;
   if (top === 'edition' && a) full = <EditionReader editionId={a} nodeId={b} noteId={query.get('note')} />;
 
   let page: React.ReactNode;

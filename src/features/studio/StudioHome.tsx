@@ -1,3 +1,5 @@
+import { GoalPicker } from './GoalPicker';
+import { distributeGoal, SEED_PER_PAGE } from '../../lib/goals';
 import { useMemo, useState } from 'react';
 import { api } from '../../lib/api';
 import { BookCard, charsLabel } from '../../lib/BookCard';
@@ -235,10 +237,17 @@ function NewBook({ onClose }: { onClose: () => void }) {
   const [tpl, setTpl] = useState('blank');
   const [color, setColor] = useState(COVERS[Math.floor(Math.random() * COVERS.length)][0]);
   const [busy, setBusy] = useState(false);
+  const [goal, setGoal] = useState(0);
   const create = async () => {
     setBusy(true);
     try {
-      const b = await createBookFrom({ title: title.trim() || '제목 없는 책', author: user.nickname, kind: 'write', nodes: templateNodes(tpl), color, meta: { template: tpl } });
+      const nodes = templateNodes(tpl);
+      if (goal) {
+        const ch = nodes.filter((n) => n.kind !== 'part');
+        const m = distributeGoal(ch.map((n) => ({ id: n.tmp, body: n.body, meta: {} })), goal);
+        for (const n of ch) if (m.get(n.tmp)) n.meta = { target: m.get(n.tmp) };
+      }
+      const b = await createBookFrom({ title: title.trim() || '제목 없는 책', author: user.nickname, kind: 'write', nodes, color, meta: { template: tpl }, goal_chars: goal });
       onClose();
       go(`write/${b.id}?view=plan`);
     } catch (e) {
@@ -277,6 +286,10 @@ function NewBook({ onClose }: { onClose: () => void }) {
             </label>
           ))}
         </div>
+      </div>
+      <div className="field">
+        목표 분량 <span className="faint tiny">정하면 장마다 「이 칸 목표 글자」를 나눠 넣어요</span>
+        <GoalPicker value={goal} onChange={setGoal} per={SEED_PER_PAGE} own={false} />
       </div>
       <div className="field">
         표지 색

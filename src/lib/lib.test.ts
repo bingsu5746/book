@@ -188,3 +188,54 @@ describe('쪽 줄거리', () => {
     expect(beatWritten(parseBeats('%%▸ a%%\n' + '가'.repeat(31)).beats[0])).toBe(true);
   });
 });
+
+import { distributeGoal, goalLeaves, pagesToChars } from './goals';
+import { infoGaps, mergeInfo, shouldAutoFill } from './fillinfo';
+import type { BookNode } from './types';
+
+const nd = (p: Partial<BookNode>): BookNode => ({ id: 'x', book_id: 'b', parent_id: null, kind: 'chapter', sort: 0, title: '', body: '', synopsis: '', status: '', label: '', meta: {}, chars: 0, rev: 1, updated: 0, deleted: null, ...p });
+
+describe('목표 분량 나누기', () => {
+  it('고르게 나누고, 쪽 줄거리가 많은 장에 더 준다', () => {
+    const a = nd({ id: 'a' });
+    const b = nd({ id: 'b' });
+    expect([...distributeGoal([a, b], 10000).values()]).toEqual([5000, 5000]);
+    const c = nd({ id: 'c', body: '%%▸ 하나%%\n%%▸ 둘%%\n%%▸ 셋%%\n' });
+    const m = distributeGoal([a, c], 8000);
+    expect(m.get('a')).toBe(2000);
+    expect(m.get('c')).toBe(6000);
+  });
+  it('이미 정한 칸은 두고 남은 분량만 나눈다', () => {
+    const m = distributeGoal([nd({ id: 'a', meta: { target: 6000 } }), nd({ id: 'b' }), nd({ id: 'c' })], 10000, true);
+    expect(m.has('a')).toBe(false);
+    expect(m.get('b')).toBe(2000);
+  });
+  it('장면을 거느린 장은 빼고 장면에 준다, 부 · 메모는 빼기', () => {
+    const l = goalLeaves([nd({ id: 'p', kind: 'part' }), nd({ id: 'c', parent_id: 'p' }), nd({ id: 's', kind: 'scene', parent_id: 'c' }), nd({ id: 'n', kind: 'note' }), nd({ id: 'c2' })]);
+    expect(l.map((x) => x.id)).toEqual(['s', 'c2']);
+  });
+  it('원고지 매수를 글자로', () => {
+    expect(pagesToChars(80)).toBe(12000);
+    expect(pagesToChars(1000, 149)).toBe(149000);
+  });
+});
+
+describe('장 정보 AI 채우기', () => {
+  const long = '가'.repeat(250);
+  it('빈 칸만 채우고 직접 쓴 칸은 둔다', () => {
+    const n = nd({ body: long, meta: { pov: '나' } });
+    expect(infoGaps(n)).toEqual(['synopsis', 'place', 'time', 'tags']);
+    const { patch, filled } = mergeInfo(n, { synopsis: '요약', pov: '홍설', place: '집', time: '', tags: ['꿈'] });
+    expect(patch.synopsis).toBe('요약');
+    expect(patch.meta?.pov).toBe('나');
+    expect(patch.meta?.place).toBe('집');
+    expect(patch.meta?.time).toBeUndefined();
+    expect(filled).toEqual(['줄거리', '장소', '꼬리표']);
+  });
+  it('같은 원고로 한 번 해 봤으면 다시 하지 않는다', () => {
+    const n = nd({ body: long, synopsis: '사람이 씀', meta: { infoAiChars: 250 } });
+    expect(shouldAutoFill(n)).toBe(false);
+    expect(shouldAutoFill(nd({ body: long, synopsis: '사람이 씀' }))).toBe(true);
+    expect(shouldAutoFill(nd({ body: '가'.repeat(100) }))).toBe(false);
+  });
+});
