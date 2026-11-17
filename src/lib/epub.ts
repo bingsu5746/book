@@ -33,18 +33,18 @@ ${body}
 </body>
 </html>`;
 
-export function makeEpub(book: { title: string; author: string; id: string; color?: string; meta?: Record<string, unknown> }, nodes: ReadNode[]): Uint8Array {
+export function makeEpub(book: { title: string; author: string; id: string; color?: string; meta?: Record<string, unknown> }, nodes: ReadNode[], opts: { breaks?: boolean } = {}): Uint8Array {
   // 부는 혼자 한 쪽, 장 · 장면은 장 단위로 묶어 한 파일
   const chapters: { id: string; title: string; level: number; html: string }[] = [];
   let lastKind = '';
   for (const n of nodes) {
     if (n.kind === 'part') {
-      chapters.push({ id: `c${chapters.length + 1}`, title: n.title, level: 1, html: `<h1>${esc(n.title)}</h1>\n${n.body.trim() ? toXhtml(renderMd(n.body)) : ''}` });
+      chapters.push({ id: `c${chapters.length + 1}`, title: n.title, level: 1, html: `<h1>${esc(n.title)}</h1>\n${n.body.trim() ? toXhtml(renderMd(n.body, opts)) : ''}` });
     } else if (n.kind === 'chapter' || !chapters.length || lastKind === 'part') {
-      chapters.push({ id: `c${chapters.length + 1}`, title: n.title || `${chapters.length + 1}`, level: 2, html: `<h2>${esc(n.title)}</h2>\n${toXhtml(renderMd(n.body))}` });
+      chapters.push({ id: `c${chapters.length + 1}`, title: n.title || `${chapters.length + 1}`, level: 2, html: `<h2>${esc(n.title)}</h2>\n${toXhtml(renderMd(n.body, opts))}` });
     } else {
       // 장면: 앞 장에 이어 붙이고 장면 나눔 표시
-      chapters[chapters.length - 1].html += `\n<p class="scene">*&#160;&#160;*&#160;&#160;*</p>\n${toXhtml(renderMd(n.body))}`;
+      chapters[chapters.length - 1].html += `\n<p class="scene">*&#160;&#160;*&#160;&#160;*</p>\n${toXhtml(renderMd(n.body, opts))}`;
     }
     lastKind = n.kind;
   }

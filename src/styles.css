@@ -3424,3 +3424,18 @@ details.more > label.field {
   font-family: var(--sans);
   font-size: 13.5px;
 }
+.tidy-preview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.tidy-preview .diff {
+  max-height: 40vh;
+  font-size: 14px;
+  padding: 12px;
+}
+@media (max-width: 640px) {
+  .tidy-preview {
+    grid-template-columns: 1fr;
+  }
+}

@@ -26,11 +26,11 @@ export function toText(title: string, author: string, nodes: ReadNode[]): string
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
-export function toHtml(title: string, author: string, nodes: ReadNode[]): string {
+export function toHtml(title: string, author: string, nodes: ReadNode[], opts: { breaks?: boolean } = {}): string {
   const body = nodes
     .map((n) => {
       const head = n.kind === 'part' ? `<h1 class="part">${esc(n.title)}</h1>` : n.kind === 'chapter' ? `<h2>${esc(n.title)}</h2>` : n.kind === 'scene' ? '<p class="scene">*&nbsp;&nbsp;*&nbsp;&nbsp;*</p>' : '';
-      return head + renderMd(n.body);
+      return head + renderMd(n.body, opts);
     })
     .join('\n');
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>

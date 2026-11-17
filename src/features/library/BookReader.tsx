@@ -78,12 +78,13 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
       }}
       nodes={nodes}
       progressKey={`b:${bookId}`}
+      lineBreaks={data.book.kind === 'write'}
       initialFind={find ?? undefined}
       start={nodeId ? { n: nodeId, o: Number(at ?? 0) } : null}
       onExit={() => (history.length > 1 ? history.back() : go('library'))}
       actions={[
         ...(data.book.kind === 'write' ? [{ label: '집필실에서 고치기', icon: 'pen', href: `#/write/${bookId}` }] : [{ label: '독서 기록', icon: 'star', onClick: () => setLog(true) }]),
-        { label: '전자책(EPUB)으로 받기', icon: 'download', onClick: () => download(`${data.book.title}.epub`, new Blob([makeEpub(data.book, nodes) as BlobPart], { type: 'application/epub+zip' })) },
+        { label: '전자책(EPUB)으로 받기', icon: 'download', onClick: () => download(`${data.book.title}.epub`, new Blob([makeEpub(data.book, nodes, { breaks: data.book.kind === 'write' }) as BlobPart], { type: 'application/epub+zip' })) },
       ]}
     />
     {log && <ReadLog book={data.book} onClose={() => setLog(false)} onSave={(m) => (patchMeta(m), setLog(false))} />}

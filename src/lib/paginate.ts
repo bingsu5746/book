@@ -44,7 +44,7 @@ function linkNames(el: HTMLElement, re: RegExp, seen: Set<string>) {
   }
 }
 
-export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean; names?: string[] } = {}): HTMLElement[] {
+export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean; names?: string[]; breaks?: boolean } = {}): HTMLElement[] {
   const names = (opts.names ?? []).filter((n) => n.trim().length >= 2).sort((a, b) => b.length - a.length);
   const nameRe = names.length ? new RegExp(names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g') : null;
   const out: HTMLElement[] = [];

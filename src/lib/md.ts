@@ -2,12 +2,16 @@
 import { Marked } from 'marked';
 
 const marked = new Marked({ gfm: true, breaks: false });
+/** 내가 쓴 책: 한 번 친 엔터도 줄바꿈으로 (집필실에서 본 그대로) */
+const markedBr = new Marked({ gfm: true, breaks: true });
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 export interface RenderOpts {
   /** [[이름]] 을 세계관 링크로 표시 (아니면 그냥 글) */
   links?: boolean;
+  /** 한 번 친 엔터를 줄바꿈으로 보이기 (내가 쓴 책). 들인 책은 끄기: 옛 글은 줄 끝마다 엔터가 있어서 */
+  breaks?: boolean;
 }
 
 /** 원고 안 표시를 리더용으로 바꾼다: %%작가 메모%% 는 지우고, [[이름|보일 말]] 은 보일 말로 */
@@ -43,5 +47,7 @@ export function sanitize(html: string): string {
 }
 
 export function renderMd(md: string, opts: RenderOpts = {}): string {
-  return sanitize(marked.parse(preprocess(md, opts), { async: false }) as string);
+  const html = (opts.breaks ? markedBr : marked).parse(preprocess(md, opts), { async: false }) as string;
+  // <br> 뒤에 엔터를 남겨 글자 위치(책갈피 · 밑줄 · 주석)가 줄바꿈을 보이기 전과 같게
+  return sanitize(opts.breaks ? html.replace(/<br>(?!\n)/g, '<br>\n') : html);
 }

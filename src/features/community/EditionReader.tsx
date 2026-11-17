@@ -111,7 +111,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
       const body = document.createElement('div');
       body.className = 'nbody';
       body.dataset.node = n.id;
-      body.innerHTML = renderMd(n.body);
+      body.innerHTML = renderMd(n.body, { breaks: true });
       sec.appendChild(body);
       const text = body.textContent ?? '';
       for (const a of visible.filter((x) => x.node_id === n.id && x.quote)) {
@@ -224,6 +224,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
         title={d.book.title}
         nodes={d.nodes}
         progressKey={`e:${d.book.id}`}
+        lineBreaks
         forceMode="page"
         entries={entries}
         onExit={() => setPageMode(false)}
@@ -378,7 +379,7 @@ function NotesPane({
     const n = d.nodes.find((x) => x.id === a.node_id);
     if (!n || !a.quote) return !n;
     const div = document.createElement('div');
-    div.innerHTML = renderMd(n.body);
+    div.innerHTML = renderMd(n.body, { breaks: true });
     return !findAnchor(div.textContent ?? '', a);
   };
   const send = async (body: string, extra: Record<string, unknown>) => {

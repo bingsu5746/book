@@ -69,6 +69,7 @@ export function Reader({
   onFinish,
   forceMode,
   initialFind,
+  lineBreaks = false,
 }: {
   title: string;
   nodes: ReadNode[];
@@ -84,6 +85,8 @@ export function Reader({
   onFinish?: () => void;
   forceMode?: 'page' | 'scroll';
   initialFind?: string;
+  /** 한 번 친 엔터를 줄바꿈으로 (내가 쓴 책) */
+  lineBreaks?: boolean;
 }) {
   const [prefs, setPrefsState] = useState<ReaderPrefs>(loadPrefs);
   const setPrefs = (p: Partial<ReaderPrefs>) =>
@@ -106,7 +109,7 @@ export function Reader({
   const spot = useRef<Spot | null>(start ?? null);
   const order = useMemo(() => nodes.map((n) => n.id), [nodes]);
   const showLinks = prefs.links && !!entries?.length;
-  const blocks = useMemo(() => buildBlocks(nodes, { links: showLinks, names: showLinks ? entries!.flatMap((e) => [e.name, ...e.aliases]) : [] }), [nodes, showLinks, entries]);
+  const blocks = useMemo(() => buildBlocks(nodes, { breaks: lineBreaks, links: showLinks, names: showLinks ? entries!.flatMap((e) => [e.name, ...e.aliases]) : [] }), [nodes, showLinks, entries, lineBreaks]);
   const [wl, setWl] = useState<{ x: number; y: number; e: EntryRef | null; name: string } | null>(null);
   const openLink = (t: HTMLElement) => {
     const el = t.closest<HTMLElement>('.wl');

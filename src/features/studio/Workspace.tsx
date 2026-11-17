@@ -12,6 +12,7 @@ import { confirmBox, Icon, Menu, Modal, promptBox, Spinner, toast } from '../../
 import { entriesOf, loadWorld, newItemId, saveItems, toRefs, type Entry, type WItem } from '../../lib/world';
 import { Binder, type BinderActions } from './Binder';
 import { Editor, type EditorHandle } from './Editor';
+import { TidyBreaks } from './TidyBreaks';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
 import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
@@ -87,6 +88,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
     });
   const [mobile, setMobile] = useState<'' | 'binder' | 'side'>('');
   const [items, setItems] = useState<WItem[]>([]);
+  const [tidy, setTidy] = useState(false);
   const [save, setSave] = useState({ pending: 0, error: null as string | null });
   const [selChars, setSelChars] = useState(0);
   const [sprint, setSprint] = useState<{ end: number; start: number; startChars: number } | null>(null);
@@ -272,6 +274,35 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   useEffect(() => {
     if (findQ && sel && view === 'write') setTimeout(() => editor.current?.find(findQ), 200);
   }, [findQ, sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 기다리던 저장을 바로 보내고, 보내는 중인 것은 끝나기를 기다린다 (서버가 저장된 원고를 읽거나 기록을 남기기 전에) */
+  const flush = async (id: string) => {
+    const n = dataRef.current?.nodes.find((x) => x.id === id);
+    if (!n) return;
+    const waiting = timers.current.has(id);
+    clearTimeout(timers.current.get(id));
+    timers.current.delete(id);
+    const r = waiting ? await saveBody(id, bookId, n.body ?? '', revs.current.get(id) ?? n.rev) : await pushDraft(id);
+    if (r) {
+      revs.current.set(id, r.rev);
+      updateNode(id, { rev: r.rev, updated: Date.now() });
+    }
+  };
+  /** 줄바꿈 정리: 장마다 바꾸기 전 글을 기록에 남기고 바꾼다 */
+  const applyTidy = async (changes: { id: string; body: string }[]) => {
+    try {
+      for (const c of changes) {
+        await flush(c.id);
+        await api(`nodes/${c.id}/snapshots`, { body: { label: '줄바꿈 정리 전' } });
+      }
+    } catch (e) {
+      toast(`기록을 남기지 못해 정리하지 않았어요. ${(e as Error).message}`, 'err');
+      throw e;
+    }
+    for (const c of changes) onBody(c.id, c.body);
+    setEdKey((k) => k + 1);
+    toast(`${changes.length}개 장의 줄바꿈을 정리했어요. 전 글은 「기록」에 있어요.`);
+  };
 
   /** AI 줄거리 요약: 서버가 원고를 읽어 요약을 돌려주면 장 정보에 저장한다 */
   const summarize = async (n: BookNode): Promise<string> => {
@@ -483,6 +514,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   )}
                   {speakSupported() && <button onClick={() => (close(), toggleSpeak())}>{speaking ? '듣기 멈추기' : '소리 내어 듣기 (커서부터)'}</button>}
                   <button onClick={() => (close(), openSpell())}>맞춤법 검사 (F7)</button>
+                  <button onClick={() => (close(), setTidy(true))}>줄바꿈 정리 (엔터 줄이기)</button>
                   <button onClick={() => (close(), setJotPick(true))}>수첩에서 꺼내 넣기</button>
                   <hr />
                 </>
@@ -541,15 +573,16 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
               <hr />
               <button onClick={() => (close(), setHelp(true))}>단축키 보기</button>
               <hr />
-              <button onClick={() => (close(), download(`${book.title}.epub`, new Blob([makeEpub(book, readNodes()) as BlobPart], { type: 'application/epub+zip' })))}>전자책(EPUB)으로 내보내기</button>
+              <button onClick={() => (close(), download(`${book.title}.epub`, new Blob([makeEpub(book, readNodes(), { breaks: book.kind === 'write' }) as BlobPart], { type: 'application/epub+zip' })))}>전자책(EPUB)으로 내보내기</button>
               <button onClick={() => (close(), download(`${book.title}.md`, toMarkdown(book.title, book.author, readNodes()), 'text/markdown;charset=utf-8'))}>마크다운(.md)으로 내보내기</button>
               <button onClick={() => (close(), download(`${book.title}.txt`, toText(book.title, book.author, readNodes())))}>글(.txt)로 내보내기</button>
-              <button onClick={() => (close(), download(`${book.title}.html`, toHtml(book.title, book.author, readNodes()), 'text/html;charset=utf-8'))}>인쇄용 HTML 로 내보내기</button>
+              <button onClick={() => (close(), download(`${book.title}.html`, toHtml(book.title, book.author, readNodes(), { breaks: book.kind === 'write' }), 'text/html;charset=utf-8'))}>인쇄용 HTML 로 내보내기</button>
             </>
           )}
         </Menu>
       </header>
 
+      {tidy && <TidyBreaks node={sel && sel.kind !== 'part' ? sel : null} nodes={ordered} onClose={() => setTidy(false)} onApply={applyTidy} />}
       {jotPick && (
         <JotPicker
           onClose={() => setJotPick(false)}
@@ -738,17 +771,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
           summarize={summarize}
           fillInfo={fillInfo}
           prepareAi={async () => {
-            if (!sel) return;
-            // 기다리던 저장을 바로 보내고, 보내는 중인 것은 끝나기를 기다린다 (서버는 저장된 원고를 읽는다)
-            const id = sel.id;
-            const waiting = timers.current.has(id);
-            clearTimeout(timers.current.get(id));
-            timers.current.delete(id);
-            const r = waiting ? await saveBody(id, bookId, body, revs.current.get(id) ?? sel.rev) : await pushDraft(id);
-            if (r) {
-              revs.current.set(id, r.rev);
-              updateNode(id, { rev: r.rev, updated: Date.now() });
-            }
+            if (sel) await flush(sel.id);
           }}
           onAddEntries={async (es) => {
             if (!book.world_id) throw new Error('먼저 책 설정에서 세계관을 연결해 주세요.');
