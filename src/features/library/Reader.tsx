@@ -16,8 +16,22 @@ export interface ReaderPrefs {
   theme: 'paper' | 'sepia' | 'dark';
   mode: 'page' | 'scroll';
   spread: 'auto' | 'one';
+  /** 쪽 넘김 효과: 종이처럼 넘기기 · 밀기 · 없음 */
+  turn: 'curl' | 'slide' | 'none';
+  /** 가만히 두면 위아래 막대 숨기기 */
+  autoHide: boolean;
+  /** 쪽 여백 */
+  margin: 'narrow' | 'normal' | 'wide';
 }
-const DEFAULT: ReaderPrefs = { fs: 17, lh: 1.85, font: 'serif', theme: 'paper', mode: 'page', spread: 'auto' };
+const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DEFAULT: ReaderPrefs = { fs: 17, lh: 1.85, font: 'serif', theme: 'paper', mode: 'page', spread: 'auto', turn: reduced ? 'none' : 'curl', autoHide: true, margin: 'normal' };
+
+export interface ReaderAction {
+  label: string;
+  icon: string;
+  onClick?: () => void;
+  href?: string;
+}
 export const loadPrefs = (): ReaderPrefs => ({ ...DEFAULT, ...local.get<Partial<ReaderPrefs>>('reader', {}) });
 
 interface Bookmark {
@@ -43,6 +57,7 @@ export function Reader({
   start,
   onExit,
   extraButtons,
+  actions = [],
   forceMode,
   initialFind,
 }: {
@@ -52,6 +67,8 @@ export function Reader({
   start?: Spot | null;
   onExit: () => void;
   extraButtons?: React.ReactNode;
+  /** ⋯ 메뉴에 더할 일 */
+  actions?: ReaderAction[];
   forceMode?: 'page' | 'scroll';
   initialFind?: string;
 }) {
@@ -63,7 +80,7 @@ export function Reader({
       return v;
     });
   const mode = forceMode ?? prefs.mode;
-  const [pop, setPop] = useState<'' | 'toc' | 'set' | 'marks' | 'find'>(initialFind ? 'find' : '');
+  const [pop, setPop] = useState<'' | 'toc' | 'set' | 'marks' | 'find' | 'more'>(initialFind ? 'find' : '');
   const [chrome, setChrome] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -195,7 +212,7 @@ export function Reader({
   useLayoutEffect(() => {
     if (mode !== 'page' || !ready) return;
     layout();
-  }, [mode, ready, layout, prefs.fs, prefs.lh, prefs.font]);
+  }, [mode, ready, layout, prefs.fs, prefs.lh, prefs.font, prefs.margin]);
   useEffect(() => {
     if (mode !== 'page') return;
     let t = 0;
@@ -216,16 +233,154 @@ export function Reader({
     if (p?.n) remember({ n: p.n, o: p.o }, idx + n2 >= pages.length);
   }, [idx, pages, mode, n2, remember]);
 
+  // ---------- 넘김 효과 ----------
+  // flip: 넘어가는 중인 장(종이처럼 넘기기). p = 0(시작) ~ 1(다 넘김)
+  const [flip, setFlip] = useState<{ dir: 1 | -1; to: number; p: number } | null>(null);
+  const [slide, setSlide] = useState<0 | 1 | -1>(0);
+  const anim = useRef(0);
+  const animateFlip = useCallback((f: { dir: 1 | -1; to: number; p: number }, target: 0 | 1) => {
+    cancelAnimationFrame(anim.current);
+    const start = performance.now();
+    const from = f.p;
+    const dur = Math.max(160, 620 * Math.abs(target - from));
+    const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / dur);
+      const p = from + (target - from) * ease(t);
+      if (t < 1) {
+        setFlip({ ...f, p });
+        anim.current = requestAnimationFrame(step);
+      } else {
+        if (target === 1) setIdx(f.to);
+        setFlip(null);
+      }
+    };
+    anim.current = requestAnimationFrame(step);
+  }, []);
   const goPage = useCallback(
     (d: number) => {
-      setIdx((i) => {
-        const t = i + d * n2;
-        if (t < 0 || t >= pages.length) return i;
-        return t;
-      });
+      const base = flip && flip.p > 0 ? flip.to : idx;
+      if (flip) {
+        cancelAnimationFrame(anim.current);
+        setFlip(null);
+        if (flip.p > 0) setIdx(flip.to);
+      }
+      const t = base + d * n2;
+      if (t < 0 || t >= pages.length) return;
+      if (mode !== 'page' || prefs.turn === 'none') return setIdx(t);
+      if (prefs.turn === 'slide') {
+        setSlide(d > 0 ? 1 : -1);
+        return setIdx(t);
+      }
+      const f = { dir: (d > 0 ? 1 : -1) as 1 | -1, to: t, p: 0 };
+      setFlip(f);
+      animateFlip(f, 1);
     },
-    [n2, pages.length],
+    [n2, pages.length, idx, flip, prefs.turn, mode, animateFlip],
   );
+  useEffect(() => () => cancelAnimationFrame(anim.current), []);
+
+  // 끌어서 넘기기 (손가락 · 마우스): 가로로 끌면 장이 손을 따라 넘어간다
+  const drag = useRef<{ x: number; y: number; id: number; started: boolean; dir: 1 | -1; t: number; w: number } | null>(null);
+  const dragged = useRef(false);
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (mode !== 'page' || prefs.turn !== 'curl' || e.button > 0) return;
+    const book = (e.currentTarget as HTMLElement).querySelector('.book')?.getBoundingClientRect();
+    if (!book) return;
+    // 마우스는 책 가장자리에서만 (가운데는 글 고르기)
+    const edge = Math.min(e.clientX - book.left, book.right - e.clientX);
+    if (e.pointerType === 'mouse' && edge > book.width * 0.16) return;
+    drag.current = { x: e.clientX, y: e.clientY, id: e.pointerId, started: false, dir: 1, t: performance.now(), w: book.width };
+    dragged.current = false;
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d || d.id !== e.pointerId) return;
+    const dx = e.clientX - d.x;
+    if (!d.started) {
+      if (Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(e.clientY - d.y)) return;
+      const dir = dx < 0 ? 1 : -1;
+      const t = idx + dir * n2;
+      if (t < 0 || t >= pages.length) return (drag.current = null);
+      d.started = true;
+      d.dir = dir;
+      dragged.current = true;
+      getSelection()?.removeAllRanges();
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    }
+    const p = Math.max(0, Math.min(1, (d.dir === 1 ? -dx : dx) / (d.w * (n2 === 2 ? 0.55 : 0.85))));
+    cancelAnimationFrame(anim.current);
+    setFlip({ dir: d.dir, to: idx + d.dir * n2, p });
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d?.started || !flip) return;
+    const fast = Math.abs(e.clientX - d.x) / (performance.now() - d.t) > 0.5;
+    animateFlip(flip, flip.p > 0.3 || fast ? 1 : 0);
+  };
+
+  // 가만히 두면 위아래 막대를 숨긴다 (쪽 넘김에서)
+  const idle = useRef(0);
+  const poke = useCallback(() => {
+    clearTimeout(idle.current);
+    if (!prefs.autoHide || mode !== 'page') return;
+    idle.current = window.setTimeout(() => setChrome(false), 3500);
+  }, [prefs.autoHide, mode]);
+  useEffect(() => {
+    if (pop) {
+      clearTimeout(idle.current);
+      setChrome(true);
+    } else poke();
+    return () => clearTimeout(idle.current);
+  }, [pop, poke]);
+
+  // 읽은 시간: 30초마다, 화면이 보이고 3분 안에 넘기거나 움직였으면 30초를 더한다 (2분마다 서버로)
+  const lastAct = useRef(Date.now());
+  useEffect(() => {
+    lastAct.current = Date.now();
+  }, [idx, pop]);
+  useEffect(() => {
+    let buf = 0;
+    const act = () => (lastAct.current = Date.now());
+    const flushRead = () => {
+      if (!buf) return;
+      const secs = buf;
+      buf = 0;
+      void api('stats/read', { body: { day: new Date().toLocaleDateString('sv-SE'), secs } }).catch(() => {});
+    };
+    const tick = setInterval(() => {
+      if (document.visibilityState === 'visible' && Date.now() - lastAct.current < 180_000) buf += 30;
+    }, 30_000);
+    const flush = setInterval(flushRead, 120_000);
+    addEventListener('keydown', act);
+    addEventListener('pointerdown', act);
+    addEventListener('wheel', act, { passive: true });
+    return () => {
+      clearInterval(tick);
+      clearInterval(flush);
+      removeEventListener('keydown', act);
+      removeEventListener('pointerdown', act);
+      removeEventListener('wheel', act);
+      flushRead();
+    };
+  }, []);
+
+  // 읽는 동안 화면이 꺼지지 않게 (지원하는 기기에서)
+  useEffect(() => {
+    type Lock = { release: () => Promise<void> };
+    let lock: Lock | null = null;
+    const wl = (navigator as unknown as { wakeLock?: { request: (t: 'screen') => Promise<Lock> } }).wakeLock;
+    const get = () => {
+      if (wl && document.visibilityState === 'visible') wl.request('screen').then((l) => (lock = l)).catch(() => {});
+    };
+    get();
+    document.addEventListener('visibilitychange', get);
+    return () => {
+      document.removeEventListener('visibilitychange', get);
+      void lock?.release().catch(() => {});
+    };
+  }, []);
 
   // ---------- 세로 스크롤 ----------
   useLayoutEffect(() => {
@@ -307,7 +462,6 @@ export function Reader({
     addEventListener('keydown', k);
     return () => removeEventListener('keydown', k);
   }, [mode, goPage, pop, onExit]);
-  const touch = useRef<{ x: number; y: number } | null>(null);
 
   const jump = (s: Spot) => {
     spot.current = s;
@@ -359,54 +513,66 @@ export function Reader({
   })();
 
   useEffect(() => {
+    if (flip) return;
     paintLines(mode === 'page' ? stageRef.current : scrollRef.current);
   }); // 쪽이 바뀔 때마다 (React 가 쪽 내용을 새로 넣은 뒤)
+
+  const face = (i: number, side: 'L' | 'R' | 'S', key?: string) => {
+    const p = pages[i];
+    return (
+      <div key={key} className={`r-page ${side}${p ? ' ' + p.cls : ' blank'}`}>
+        <div className="run">{p ? (n2 === 2 && side === 'L' ? title : p.sec || title) : ''}</div>
+        <div className={`r-body prose${p?.cls.includes('chapter') ? ' chapter' : ''}`} dangerouslySetInnerHTML={{ __html: p?.html ?? '' }} />
+        <div className="folio">{p ? i + 1 : ''}</div>
+      </div>
+    );
+  };
+  const onPageClick = (e: React.MouseEvent, j: number) => {
+    if (dragged.current) return (dragged.current = false);
+    if (String(getSelection()).length || (e.target as HTMLElement).closest('a')) return;
+    if (pop) return setPop('');
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width;
+    if (n2 === 2) {
+      if ((j === 0 && x < 0.3) || (j === 1 && x > 0.7)) goPage(j === 0 ? -1 : 1);
+      else setChrome((c) => !c);
+    } else if (x < 0.3) goPage(-1);
+    else if (x > 0.7) goPage(1);
+    else setChrome((c) => !c);
+  };
+  const speakNow = () => {
+    if (speaking) {
+      stopSpeaking();
+      return setSpeaking(false);
+    }
+    const s = spot.current ?? { n: order[0], o: 0 };
+    const text = blocks
+      .filter((b) => b.dataset.n === s.n && Number(b.dataset.o ?? 0) + (b.textContent ?? '').length > s.o)
+      .map((b) => b.textContent ?? '')
+      .join('\n\n');
+    setSpeaking(true);
+    speak(text, () => setSpeaking(false));
+  };
 
   const pct = mode === 'page' && pages.length ? Math.round(((idx + n2) / pages.length) * 100) : null;
 
   return (
     <div
       ref={rootRef}
-      className={`reader t-${prefs.theme}${prefs.font === 'sans' ? ' f-sans' : ''}${chrome ? '' : ' chrome-off'}`}
+      className={`reader t-${prefs.theme}${prefs.font === 'sans' ? ' f-sans' : ''}${chrome ? '' : ' chrome-off'} m-${prefs.margin}`}
       style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh) }}
     >
-      <div className="r-bar">
+      <div className="r-bar" onPointerMove={poke}>
         <button className="icon-btn" onClick={onExit} aria-label="닫기">
           <Icon name="back" />
         </button>
         <div className="name">{title}</div>
+        {speaking && (
+          <button className="icon-btn" aria-label="읽기 멈추기" aria-pressed onClick={speakNow}>
+            <Icon name="sound" />
+          </button>
+        )}
         {extraButtons}
-        {speakSupported() && (
-          <button
-            className="icon-btn"
-            aria-label={speaking ? '읽기 멈추기' : '소리 내어 읽기 (지금 자리부터 이 장 끝까지)'}
-            title={speaking ? '읽기 멈추기' : '소리 내어 읽기'}
-            aria-pressed={speaking}
-            onClick={() => {
-              if (speaking) {
-                stopSpeaking();
-                return setSpeaking(false);
-              }
-              const s = spot.current ?? { n: order[0], o: 0 };
-              const text = blocks
-                .filter((b) => b.dataset.n === s.n && Number(b.dataset.o ?? 0) + (b.textContent ?? '').length > s.o)
-                .map((b) => b.textContent ?? '')
-                .join('\n\n');
-              setSpeaking(true);
-              speak(text, () => setSpeaking(false));
-            }}
-          >
-            <Icon name={speaking ? 'close' : 'sound'} />
-          </button>
-        )}
-        <button className="icon-btn" aria-label="책 안에서 찾기" aria-pressed={pop === 'find'} onClick={() => setPop(pop === 'find' ? '' : 'find')}>
-          <Icon name="search" />
-        </button>
-        {progressKey && (
-          <button className="icon-btn" aria-label="책갈피" aria-pressed={pop === 'marks'} onClick={() => setPop(pop === 'marks' ? '' : 'marks')}>
-            <Icon name="bookmark" />
-          </button>
-        )}
         {!!toc.length && (
           <button className="icon-btn" aria-label="목차" aria-pressed={pop === 'toc'} onClick={() => setPop(pop === 'toc' ? '' : 'toc')}>
             <Icon name="list" />
@@ -415,8 +581,60 @@ export function Reader({
         <button className="icon-btn" aria-label="보기 설정" aria-pressed={pop === 'set'} onClick={() => setPop(pop === 'set' ? '' : 'set')}>
           <Icon name="type" />
         </button>
+        <button className="icon-btn" aria-label="더 보기" aria-pressed={pop === 'more'} onClick={() => setPop(pop === 'more' ? '' : 'more')}>
+          <Icon name="more" />
+        </button>
       </div>
 
+      {pop === 'more' && (
+        <div className="r-pop" role="menu" aria-label="더 보기" style={{ width: 'min(260px, calc(100% - 24px))' }}>
+          <button className="toc-item" role="menuitem" onClick={() => setPop('find')}>
+            <span className="row">
+              <Icon name="search" size={16} />책 안에서 찾기
+            </span>
+          </button>
+          {progressKey && (
+            <button className="toc-item" role="menuitem" onClick={() => setPop('marks')}>
+              <span className="row">
+                <Icon name="bookmark" size={16} />책갈피 · 밑줄 {marks.length ? <span style={{ color: 'var(--rmuted)' }}>{marks.length}</span> : null}
+              </span>
+            </button>
+          )}
+          {progressKey && (
+            <button className="toc-item" role="menuitem" onClick={() => (setPop(''), void addMark())}>
+              <span className="row">
+                <Icon name="plus" size={16} />
+                지금 자리에 책갈피
+              </span>
+            </button>
+          )}
+          {speakSupported() && (
+            <button className="toc-item" role="menuitem" onClick={() => (setPop(''), speakNow())}>
+              <span className="row">
+                <Icon name="sound" size={16} />
+                {speaking ? '읽기 멈추기' : '소리 내어 읽기'}
+              </span>
+            </button>
+          )}
+          {actions.map((a) =>
+            a.href ? (
+              <a key={a.label} className="toc-item" role="menuitem" href={a.href} style={{ textDecoration: 'none' }}>
+                <span className="row">
+                  <Icon name={a.icon} size={16} />
+                  {a.label}
+                </span>
+              </a>
+            ) : (
+              <button key={a.label} className="toc-item" role="menuitem" onClick={() => (setPop(''), a.onClick?.())}>
+                <span className="row">
+                  <Icon name={a.icon} size={16} />
+                  {a.label}
+                </span>
+              </button>
+            ),
+          )}
+        </div>
+      )}
       {pop === 'toc' && (
         <div className="r-pop" role="dialog" aria-label="목차">
           {toc.map((e, k) => (
@@ -478,6 +696,22 @@ export function Reader({
               ))}
             </div>
           </div>
+          <div className="opt">
+            여백
+            <div className="seg">
+              {(
+                [
+                  ['narrow', '좁게'],
+                  ['normal', '보통'],
+                  ['wide', '넓게'],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} className={prefs.margin === k ? 'on' : ''} onClick={() => setPrefs({ margin: k })}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
           {!forceMode && (
             <div className="opt">
               넘기기
@@ -487,6 +721,37 @@ export function Reader({
                 </button>
                 <button className={prefs.mode === 'scroll' ? 'on' : ''} onClick={() => setPrefs({ mode: 'scroll' })}>
                   스크롤
+                </button>
+              </div>
+            </div>
+          )}
+          {mode === 'page' && (
+            <div className="opt">
+              넘김 효과
+              <div className="seg">
+                {(
+                  [
+                    ['curl', '종이처럼'],
+                    ['slide', '밀기'],
+                    ['none', '없음'],
+                  ] as const
+                ).map(([k, l]) => (
+                  <button key={k} className={prefs.turn === k ? 'on' : ''} onClick={() => setPrefs({ turn: k })}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {mode === 'page' && (
+            <div className="opt">
+              막대 숨기기
+              <div className="seg">
+                <button className={prefs.autoHide ? 'on' : ''} onClick={() => setPrefs({ autoHide: true })}>
+                  저절로
+                </button>
+                <button className={!prefs.autoHide ? 'on' : ''} onClick={() => setPrefs({ autoHide: false })}>
+                  늘 보이기
                 </button>
               </div>
             </div>
@@ -592,46 +857,53 @@ export function Reader({
             className="r-stage"
             ref={stageRef}
             onMouseUp={readSelection}
-            onTouchStart={(e) => (touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
-            onTouchEnd={(e) => {
-              const t = touch.current;
-              touch.current = null;
-              if (!t) return;
-              const dx = e.changedTouches[0].clientX - t.x;
-              if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(e.changedTouches[0].clientY - t.y)) goPage(dx < 0 ? 1 : -1);
-              else readSelection();
+            onTouchEnd={() => !dragged.current && readSelection()}
+            onPointerDown={onPointerDown}
+            onPointerMove={(e) => {
+              onPointerMove(e);
+              if (e.pointerType === 'mouse') {
+                const h = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                if (e.clientY - h.top < 40 || h.bottom - e.clientY < 40) setChrome(true);
+                poke();
+              }
             }}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
           >
-            <div className={`book ${n2 === 2 ? 'two' : 'one'} fade-in`} key={idx}>
-              {Array.from({ length: n2 }, (_, j) => {
-                const i = idx + j;
-                const p = pages[i];
+            {!flip ? (
+              <div className={`book ${n2 === 2 ? 'two' : 'one'}${slide ? ` slide-${slide > 0 ? 'next' : 'prev'}` : ''}`} key={prefs.turn === 'slide' ? idx : 'book'} onAnimationEnd={() => setSlide(0)}>
+                {Array.from({ length: n2 }, (_, j) => (
+                  <div key={j} className="page-hit" onClick={(e) => onPageClick(e, j)}>
+                    {face(idx + j, n2 === 2 ? (j === 0 ? 'L' : 'R') : 'S')}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              (() => {
+                const { dir, to, p } = flip;
+                const shade = Math.sin(p * Math.PI);
+                const two = n2 === 2;
+                // 아래에 깔린 쪽 (넘어가는 장 밑으로 보이는 것)
+                const base = two ? (dir === 1 ? [face(idx, 'L', 'b0'), face(to + 1, 'R', 'b1')] : [face(to, 'L', 'b0'), face(idx + 1, 'R', 'b1')]) : [face(dir === 1 ? to : idx, 'S', 'b0')];
+                // 넘어가는 장: 앞면 · 뒷면
+                const front = two ? (dir === 1 ? face(idx + 1, 'R') : face(idx, 'L')) : dir === 1 ? face(idx, 'S') : face(to, 'S');
+                const back = two ? (dir === 1 ? face(to, 'L') : face(to + 1, 'R')) : <div className="r-page S blank" />;
+                const angle = two ? (dir === 1 ? -180 * p : 180 * p) : dir === 1 ? -115 * p : -115 * (1 - p);
+                const side = two ? (dir === 1 ? 'right' : 'left') : 'single';
                 return (
-                  <div
-                    key={j}
-                    className={`r-page${p ? ' ' + p.cls : ' blank'}`}
-                    onClick={(e) => {
-                      if (String(getSelection()).length || (e.target as HTMLElement).closest('a')) return;
-                      setPop('');
-                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                      const x = (e.clientX - r.left) / r.width;
-                      if (n2 === 2) {
-                        if ((j === 0 && x < 0.3) || (j === 1 && x > 0.7)) goPage(j === 0 ? -1 : 1);
-                        else setChrome((c) => !c);
-                      } else if (x < 0.3) goPage(-1);
-                      else if (x > 0.7) goPage(1);
-                      else setChrome((c) => !c);
-                    }}
-                  >
-                    <div className="run">{p ? (n2 === 2 && j === 0 ? title : p.sec || title) : ''}</div>
-                    <div className={`r-body prose${p?.cls.includes('chapter') ? ' chapter' : ''}`} dangerouslySetInnerHTML={{ __html: p?.html ?? '' }} />
-                    <div className="folio">{p ? i + 1 : ''}</div>
+                  <div className={`book ${two ? 'two' : 'one'} flipping`} style={{ ['--shade' as string]: String(shade) }}>
+                    {base}
+                    <div className={`turn-shadow ${side}`} style={{ opacity: two ? shade * 0.9 : (dir === 1 ? p : 1 - p) * 0.6 }} />
+                    <div className={`leaf ${side}`} style={{ transform: `rotateY(${angle}deg)` }}>
+                      <div className="face front">{front}</div>
+                      <div className="face back">{back}</div>
+                    </div>
                   </div>
                 );
-              })}
-            </div>
+              })()
+            )}
           </div>
-          <div className="r-foot">
+          <div className="r-foot" onPointerMove={poke}>
             <button className="r-nav" onClick={() => goPage(-1)} disabled={idx === 0} aria-label="앞 쪽">
               ‹
             </button>

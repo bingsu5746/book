@@ -217,11 +217,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
         progressKey={`e:${d.book.id}`}
         forceMode="page"
         onExit={() => setPageMode(false)}
-        extraButtons={
-          <button className="icon-btn" aria-label="주석 보며 읽기" title="주석 보며 읽기" onClick={() => setPageMode(false)}>
-            <Icon name="comment" />
-          </button>
-        }
+        actions={[{ label: '주석 보며 읽기 (스크롤)', icon: 'comment', onClick: () => setPageMode(false) }]}
       />
     );
 

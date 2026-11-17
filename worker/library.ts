@@ -170,6 +170,7 @@ export class Library extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS prefs (user_id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS images (id TEXT PRIMARY KEY, world_id TEXT NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, size INTEGER NOT NULL, created INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS images_world ON images (world_id);
+      CREATE TABLE IF NOT EXISTS read_daily (user_id TEXT NOT NULL, day TEXT NOT NULL, secs INTEGER NOT NULL, PRIMARY KEY (user_id, day));
     `);
     // 책갈피 종류: mark(책갈피) · line(밑줄). 예전 표에는 칸이 없다
     try {
@@ -264,7 +265,13 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('INSERT OR REPLACE INTO prefs (user_id, data) VALUES (?, ?)', user.id, jsonText(b.prefs, 50_000));
       return json({ ok: true });
     }
-    if (path === 'stats' && method === 'GET') return json({ days: this.rows('SELECT day, chars FROM daily WHERE user_id = ? ORDER BY day DESC LIMIT 400', user.id) });
+    if (path === 'stats' && method === 'GET') return json({ days: this.rows('SELECT day, chars FROM daily WHERE user_id = ? ORDER BY day DESC LIMIT 400', user.id), read: this.rows('SELECT day, secs FROM read_daily WHERE user_id = ? ORDER BY day DESC LIMIT 400', user.id) });
+    if (path === 'stats/read' && method === 'POST') {
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(String(b.day ?? '')) ? String(b.day) : new Date().toISOString().slice(0, 10);
+      const secs = Math.max(0, Math.min(3600, Math.floor(num(b.secs))));
+      if (secs) this.sql.exec('INSERT INTO read_daily (user_id, day, secs) VALUES (?, ?, ?) ON CONFLICT (user_id, day) DO UPDATE SET secs = secs + excluded.secs', user.id, day, secs);
+      return json({ ok: true });
+    }
 
     // 책
     if (path === 'books' && method === 'GET') return this.listBooks(user);
@@ -459,7 +466,7 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('DELETE FROM images WHERE world_id = ?', w.id);
       this.sql.exec('DELETE FROM worlds WHERE id = ?', w.id);
     }
-    for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
+    for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'read_daily', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
     this.sql.exec('UPDATE annotations SET deleted = ?, body = ? WHERE author = ?', Date.now(), '', user.id);
     this.sql.exec('DELETE FROM users WHERE id = ?', user.id);
     return json({ ok: true }, 200, { 'set-cookie': clearCookie() });

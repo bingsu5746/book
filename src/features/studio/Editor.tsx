@@ -134,7 +134,11 @@ export interface EditorProps {
   focusMode: boolean;
   typewriterMode: boolean;
   dialogueTint: boolean;
+  /** 세계관 이름 자동 완성 ([[ 없이 두 글자부터) */
+  nameComplete?: boolean;
   onLinkClick?: (name: string) => void;
+  /** 글을 고르면 그 자리(화면 좌표) — 서식 말풍선을 띄우려고 */
+  onSelectRect?: (r: { x: number; y: number } | null) => void;
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(props, ref) {
@@ -167,7 +171,15 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
     };
     const complete = (ctx: CompletionContext) => {
       const m = ctx.matchBefore(/\[\[[^\]\n]*/);
-      if (!m) return null;
+      if (!m) {
+        // [[ 없이: 세계관 이름의 앞 두 글자 이상을 치면 이름을 권한다
+        if (!propsRef.current.nameComplete) return null;
+        const w = ctx.matchBefore(/[가-힣A-Za-z0-9]{2,}$/);
+        if (!w) return null;
+        const typed = w.text;
+        const opts = propsRef.current.entries.flatMap((e) => [e.name, ...e.aliases].filter((n) => n.length > typed.length && n.startsWith(typed)).map((n) => ({ label: n, detail: e.type })));
+        return opts.length ? { from: w.from, options: opts, validFor: /^[가-힣A-Za-z0-9]*$/ } : null;
+      }
       return {
         from: m.from + 2,
         options: propsRef.current.entries.flatMap((e) => [
@@ -231,12 +243,31 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
           ]),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) propsRef.current.onChange(u.state.doc.toString());
-            if (u.selectionSet) {
+            if (u.selectionSet || u.docChanged) {
               const r = u.state.selection.main;
               propsRef.current.onSelection?.(r.empty ? 0 : u.state.sliceDoc(r.from, r.to).replace(/\s/g, '').length);
+              const cb = propsRef.current.onSelectRect;
+              if (cb) {
+                if (r.empty) cb(null);
+                else
+                  requestAnimationFrame(() => {
+                    const a = u.view.coordsAtPos(r.from);
+                    const b = u.view.coordsAtPos(r.to);
+                    if (!a || !b) return cb(null);
+                    cb({ x: a.top === b.top ? (a.left + b.left) / 2 : a.left + 60, y: a.top });
+                  });
+              }
             }
           }),
           EditorView.domEventHandlers({
+            scroll: () => {
+              propsRef.current.onSelectRect?.(null);
+              return false;
+            },
+            blur: () => {
+              setTimeout(() => propsRef.current.onSelectRect?.(null), 150);
+              return false;
+            },
             mousedown: (e, v) => {
               if (!(e.metaKey || e.ctrlKey)) return false;
               const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });

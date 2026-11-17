@@ -8,7 +8,7 @@ import { go } from '../../lib/router';
 import { flatten, loadFull, onSaveState, saveBody, toReadNodes, type FullBook } from '../../lib/store';
 import { charsNoSpace, charsWithSpace, fmtNum, manuscriptPages, plain } from '../../lib/text';
 import { KIND_LABEL, type BookNode, type NodeKind } from '../../lib/types';
-import { confirmBox, Icon, Menu, promptBox, Spinner, toast } from '../../lib/ui';
+import { confirmBox, Icon, Menu, Modal, promptBox, Spinner, toast } from '../../lib/ui';
 import { entriesOf, loadWorld, newItemId, saveItems, toRefs, type Entry, type WItem } from '../../lib/world';
 import { Binder, type BinderActions } from './Binder';
 import { Editor, type EditorHandle } from './Editor';
@@ -18,6 +18,8 @@ import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from '.
 
 type View = 'write' | 'cork' | 'outline' | 'threads' | 'replace' | 'stats' | 'notes' | 'settings';
 const VIEWS: View[] = ['write', 'cork', 'outline', 'threads', 'replace', 'stats', 'notes', 'settings'];
+const VIEW_LABEL: Record<View, string> = { write: '원고', cork: '코르크보드', outline: '개요', threads: '플롯 선', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
+const VIEW_ICON: Record<View, string> = { write: 'pen', cork: 'grid', outline: 'layers', threads: 'share', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
 interface WsPrefs {
   binder: boolean;
   side: boolean;
@@ -27,8 +29,9 @@ interface WsPrefs {
   fs: number;
   width: number;
   sideTab: SideTab;
+  names: boolean;
 }
-const DEFAULT_PREFS: WsPrefs = { binder: true, side: true, focus: false, typewriter: false, dialogue: false, fs: 17, width: 44, sideTab: 'info' };
+const DEFAULT_PREFS: WsPrefs = { binder: true, side: true, focus: false, typewriter: false, dialogue: false, fs: 17, width: 44, sideTab: 'info', names: true };
 
 export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string }) {
   const [data, setData] = useState<FullBook | null>(null);
@@ -36,6 +39,8 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const q0 = useMemo(() => new URLSearchParams(location.hash.split('?')[1] ?? ''), []);
   const [view, setView] = useState<View>(() => (VIEWS.includes(q0.get('view') as View) ? (q0.get('view') as View) : 'write'));
   const [speaking, setSpeaking] = useState(false);
+  const [bubble, setBubble] = useState<{ x: number; y: number } | null>(null);
+  const [help, setHelp] = useState(false);
   useEffect(() => () => stopSpeaking(), []);
   const [prefs, setPrefsS] = useState<WsPrefs>(() => ({ ...DEFAULT_PREFS, ...local.get<Partial<WsPrefs>>('ws', {}) }));
   const setPrefs = (p: Partial<WsPrefs>) =>
@@ -94,6 +99,8 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const sel = useMemo(() => {
     const want = nodeId && live.find((n) => n.id === nodeId);
     if (want) return want;
+    const last = live.find((n) => n.id === local.get<string>(`lastNode:${bookId}`, ''));
+    if (last) return last;
     const firstText = ordered.find((n) => n.kind !== 'part' && n.kind !== 'note') ?? ordered[0];
     return firstText ?? null;
   }, [nodeId, live, ordered]);
@@ -229,6 +236,28 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
     if (findQ && sel && view === 'write') setTimeout(() => editor.current?.find(findQ), 200);
   }, [findQ, sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 쓰던 장을 기억해 두었다가 다음에 그 장으로 연다
+  useEffect(() => {
+    if (sel) local.set(`lastNode:${bookId}`, sel.id);
+  }, [sel?.id, bookId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openSpell = () => {
+    setView('write');
+    if (innerWidth <= 820) setMobile('side');
+    setPrefs({ side: true, sideTab: 'spell' });
+  };
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key === 'F7') {
+        e.preventDefault();
+        openSpell();
+      }
+      if (e.key === '?' && (e.ctrlKey || e.metaKey)) setHelp(true);
+    };
+    addEventListener('keydown', k);
+    return () => removeEventListener('keydown', k);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (err)
     return (
       <div className="main">
@@ -252,6 +281,43 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const written = sessionStart.current != null ? total - sessionStart.current : 0;
   const sprintLeft = sprint ? Math.max(0, sprint.end - now) : 0;
   const readNodes = () => toReadNodes(data.nodes);
+  const toggleSpeak = () => {
+    if (speaking) {
+      stopSpeaking();
+      setSpeaking(false);
+      return;
+    }
+    const v = editor.current?.view;
+    const from = v ? v.state.selection.main.head : 0;
+    setSpeaking(true);
+    speak(plain(body.slice(from)), () => setSpeaking(false));
+  };
+  const splitHere = async () => {
+    const v = editor.current?.view;
+    if (!v || !sel) return;
+    const at = v.state.selection.main.head;
+    const before = v.state.doc.sliceString(0, at).replace(/\s+$/, '');
+    const after = v.state.doc.sliceString(at).replace(/^\s+/, '');
+    if (!after) return toast('커서 뒤에 글이 없어요. 나눌 곳에 커서를 두세요.', 'err');
+    const title = await promptBox('새로 나뉠 칸의 이름', `${sel.title} (2)`);
+    if (title == null) return;
+    try {
+      const sib = live.filter((x) => x.parent_id === sel.parent_id).sort((a, b) => a.sort - b.sort);
+      const next = sib[sib.findIndex((x) => x.id === sel.id) + 1];
+      const sort = next ? (sel.sort + next.sort) / 2 : sel.sort + 1;
+      const r = await api<{ created: { id: string; sort: number }[] }>(`books/${bookId}/nodes`, { body: { items: [{ kind: sel.kind, title, parent_id: sel.parent_id, sort, body: after, meta: { pov: sel.meta.pov, place: sel.meta.place } }] } });
+      const c = r.created[0];
+      revs.current.set(c.id, 1);
+      const nn: BookNode = { ...sel, id: c.id, sort: c.sort, title, body: after, chars: charsNoSpace(after), synopsis: '', rev: 1, updated: Date.now(), deleted: null };
+      setData((d) => (d ? { ...d, nodes: [...d.nodes, nn] } : d));
+      onBody(sel.id, before);
+      setEdKey((k) => k + 1);
+      toast('장을 나눴어요');
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    }
+  };
+
   const cls = ['ws', prefs.binder ? '' : 'no-binder', prefs.side && view === 'write' ? '' : 'no-side', prefs.focus ? 'focus' : '', mobile ? `m-${mobile}` : ''].join(' ');
 
   return (
@@ -265,44 +331,38 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         </button>
         <span className="book-name grow">{book.title}</span>
         <span className={`status${save.error ? ' err' : ''}`}>{save.error ? '기기에 저장됨 · 연결되면 보내요' : save.pending || timers.current.size ? '저장 중…' : '저장됨'}</span>
-        <select className="input view-select" value={view} onChange={(e) => setView(e.target.value as View)} aria-label="보기 고르기">
-          <option value="write">원고</option>
-          <option value="cork">코르크보드</option>
-          <option value="outline">개요</option>
-          <option value="stats">통계</option>
-          <option value="threads">플롯 선</option>
-          <option value="replace">찾아 바꾸기</option>
-          <option value="notes">작가 노트</option>
-          <option value="settings">책 설정</option>
-        </select>
-        <div className="seg view-seg" role="tablist" aria-label="보기">
-          {(
-            [
-              ['write', '원고', 'pen'],
-              ['cork', '코르크보드', 'grid'],
-              ['outline', '개요', 'layers'],
-              ['threads', '플롯 선', 'share'],
-              ['replace', '찾아 바꾸기', 'search'],
-              ['stats', '통계', 'chart'],
-              ['notes', '작가 노트', 'note'],
-              ['settings', '책 설정', 'settings'],
-            ] as const
-          ).map(([k, l, ic]) => (
-            <button key={k} className={view === k ? 'on' : ''} onClick={() => setView(k)} title={l} aria-label={l}>
-              <Icon name={ic} size={16} />
-              <span className="hide-sm">{l}</span>
-            </button>
-          ))}
-        </div>
+        <Menu label="보기 고르기" icon="layers" text={VIEW_LABEL[view]}>
+          {(close) => (
+            <>
+              {VIEWS.map((k) => (
+                <button key={k} className={view === k ? 'on' : ''} onClick={() => (close(), setView(k))}>
+                  <Icon name={VIEW_ICON[k]} size={16} />
+                  {VIEW_LABEL[k]}
+                </button>
+              ))}
+            </>
+          )}
+        </Menu>
         <a className="icon-btn" href={`#/read/${bookId}${sel ? '/' + sel.id : ''}`} aria-label="리더로 미리 보기" title="리더로 미리 보기">
           <Icon name="book" />
         </a>
         <Menu label="더 보기">
           {(close) => (
             <>
+              {view === 'write' && sel && (
+                <>
+                  <button onClick={() => (close(), editor.current?.insertLine('***'))}>장면 나눔 넣기</button>
+                  <button onClick={() => (close(), editor.current?.find(''))}>이 장에서 찾기 · 바꾸기 (Ctrl+F)</button>
+                  <button onClick={() => (close(), void splitHere())}>커서 자리에서 장 나누기</button>
+                  {speakSupported() && <button onClick={() => (close(), toggleSpeak())}>{speaking ? '듣기 멈추기' : '소리 내어 듣기 (커서부터)'}</button>}
+                  <button onClick={() => (close(), openSpell())}>맞춤법 검사 (F7)</button>
+                  <hr />
+                </>
+              )}
               <button onClick={() => (close(), setPrefs({ focus: !prefs.focus }))}>{prefs.focus ? '집중 모드 끄기' : '집중 모드 (지금 문단만)'}</button>
               <button onClick={() => (close(), setPrefs({ typewriter: !prefs.typewriter }))}>{prefs.typewriter ? '타자기 모드 끄기' : '타자기 모드 (쓰는 줄을 가운데)'}</button>
               <button onClick={() => (close(), setPrefs({ dialogue: !prefs.dialogue }))}>{prefs.dialogue ? '대사 색 끄기' : '대사에 옅은 색'}</button>
+              <button onClick={() => (close(), setPrefs({ names: !prefs.names }))}>{prefs.names ? '세계관 이름 자동 완성 끄기' : '세계관 이름 자동 완성 켜기'}</button>
               <hr />
               <button onClick={() => (close(), setPrefs({ fs: Math.min(24, prefs.fs + 1) }))}>글자 크게 ({prefs.fs + 1})</button>
               <button onClick={() => (close(), setPrefs({ fs: Math.max(13, prefs.fs - 1) }))}>글자 작게 ({prefs.fs - 1})</button>
@@ -318,6 +378,8 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                 <button onClick={() => (close(), setSprint(null))}>집중 쓰기 그만두기</button>
               )}
               <hr />
+              <button onClick={() => (close(), setHelp(true))}>단축키 보기</button>
+              <hr />
               <button onClick={() => (close(), download(`${book.title}.epub`, new Blob([makeEpub(book, readNodes()) as BlobPart], { type: 'application/epub+zip' })))}>전자책(EPUB)으로 내보내기</button>
               <button onClick={() => (close(), download(`${book.title}.md`, toMarkdown(book.title, book.author, readNodes()), 'text/markdown;charset=utf-8'))}>마크다운(.md)으로 내보내기</button>
               <button onClick={() => (close(), download(`${book.title}.txt`, toText(book.title, book.author, readNodes())))}>글(.txt)로 내보내기</button>
@@ -332,98 +394,76 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         )}
       </header>
 
+      {help && (
+        <Modal title="단축키" onClose={() => setHelp(false)}>
+          <dl className="kv" style={{ gridTemplateColumns: 'auto 1fr', fontSize: 14, gap: '8px 18px' }}>
+            {[
+              ['Ctrl/⌘ + B', '굵게'],
+              ['Ctrl/⌘ + I', '기울임'],
+              ['Ctrl/⌘ + K', '[[세계관 항목]] 링크 · [[ 를 치면 이름 고르기'],
+              ['Ctrl/⌘ + /', '%%작가 메모%% (리더에는 안 보여요)'],
+              ['Ctrl/⌘ + F', '이 장에서 찾기 · 바꾸기'],
+              ['Ctrl/⌘ + Z / Shift + Z', '되돌리기 / 다시'],
+              ['F7', '맞춤법 검사'],
+              ['Ctrl/⌘ + Shift + K', '빠른 이동 (책 · 장 · 항목)'],
+              ['Ctrl/⌘ + 클릭', '[[링크]] 의 세계관 항목 열기'],
+              ['Ctrl/⌘ + ?', '이 도움말'],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: 'contents' }}>
+                <dt>
+                  <kbd>{k}</kbd>
+                </dt>
+                <dd style={{ textAlign: 'left' }}>{v}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="muted small">글을 고르면 위에 작은 서식 말풍선이 떠요.</p>
+        </Modal>
+      )}
       <Binder nodes={data.nodes} sel={sel?.id ?? null} onSelect={select} act={act} />
 
       <section className="editor-wrap">
         {view === 'write' &&
           (sel ? (
             <>
-              <div className="ed-head">
-                <input key={sel.id} defaultValue={sel.title} placeholder={`${KIND_LABEL[sel.kind]} 제목`} aria-label="제목" onBlur={(e) => e.target.value !== sel.title && patchNode(sel.id, { title: e.target.value })} />
+              <div className="ed-head row">
+                <input className="grow" key={sel.id} defaultValue={sel.title} placeholder={`${KIND_LABEL[sel.kind]} 제목`} aria-label="제목" onBlur={(e) => e.target.value !== sel.title && patchNode(sel.id, { title: e.target.value })} />
+                <button className="quiet-btn" onClick={openSpell} title="맞춤법 검사 (F7)">
+                  <Icon name="check" size={15} />
+                  맞춤법
+                </button>
               </div>
-              <div className="ed-tools" role="toolbar" aria-label="서식">
-                <button className="tb" onClick={() => editor.current?.wrap('**')} title="굵게 (Ctrl+B)">
-                  <b>굵게</b>
-                </button>
-                <button className="tb" onClick={() => editor.current?.wrap('*')} title="기울임 (Ctrl+I)">
-                  <i>기울임</i>
-                </button>
-                <button className="tb" onClick={() => editor.current?.insertLine('***')} title="장면 나눔">
-                  ＊ 장면 나눔
-                </button>
-                <button className="tb" onClick={() => editor.current?.wrap('> ', '')} title="인용">
-                  ❝ 인용
-                </button>
-                <button className="tb" onClick={() => editor.current?.wrap('[[', ']]')} title="세계관 링크 (Ctrl+K)">
-                  [[ ]] 세계관
-                </button>
-                <button className="tb" onClick={() => editor.current?.wrap('%%', '%%')} title="작가 메모 (Ctrl+/) — 리더에는 안 보여요">
-                  %% 메모
-                </button>
-                <button className="tb" onClick={() => editor.current?.find('')} title="이 장에서 찾기 · 바꾸기 (Ctrl+F). 책 전체는 위의 「찾아 바꾸기」">
-                  찾기 · 바꾸기
-                </button>
-                <button
-                  className="tb"
-                  title="커서 자리에서 장을 둘로 나눠요"
-                  onClick={async () => {
-                    const v = editor.current?.view;
-                    if (!v || !sel) return;
-                    const at = v.state.selection.main.head;
-                    const before = v.state.doc.sliceString(0, at).replace(/\s+$/, '');
-                    const after = v.state.doc.sliceString(at).replace(/^\s+/, '');
-                    if (!after) return toast('커서 뒤에 글이 없어요. 나눌 곳에 커서를 두세요.', 'err');
-                    const title = await promptBox('새로 나뉠 칸의 이름', `${sel.title} (2)`);
-                    if (title == null) return;
-                    try {
-                      const sib = live.filter((x) => x.parent_id === sel.parent_id).sort((a, b) => a.sort - b.sort);
-                      const next = sib[sib.findIndex((x) => x.id === sel.id) + 1];
-                      const sort = next ? (sel.sort + next.sort) / 2 : sel.sort + 1;
-                      const r = await api<{ created: { id: string; sort: number }[] }>(`books/${bookId}/nodes`, { body: { items: [{ kind: sel.kind, title, parent_id: sel.parent_id, sort, body: after, meta: { pov: sel.meta.pov, place: sel.meta.place } }] } });
-                      const c = r.created[0];
-                      revs.current.set(c.id, 1);
-                      const nn: BookNode = { ...sel, id: c.id, sort: c.sort, title, body: after, chars: charsNoSpace(after), synopsis: '', rev: 1, updated: Date.now(), deleted: null };
-                      setData((d) => (d ? { ...d, nodes: [...d.nodes, nn] } : d));
-                      onBody(sel.id, before);
-                      setEdKey((k) => k + 1);
-                      toast('장을 나눴어요');
-                    } catch (e) {
-                      toast((e as Error).message, 'err');
-                    }
-                  }}
-                >
-                  ⫽ 여기서 나누기
-                </button>
-                {speakSupported() && (
-                  <button
-                    className="tb"
-                    title="소리 내어 들으며 퇴고해요 (커서부터, 기기의 읽어 주기 목소리)"
-                    onClick={() => {
-                      if (speaking) {
-                        stopSpeaking();
-                        setSpeaking(false);
-                        return;
-                      }
-                      const v = editor.current?.view;
-                      const from = v ? v.state.selection.main.head : 0;
-                      setSpeaking(true);
-                      speak(plain(body.slice(from)), () => setSpeaking(false));
-                    }}
-                  >
-                    {speaking ? '■ 듣기 멈춤' : '▷ 소리 내어 듣기'}
+              {bubble && (
+                <div className="fmt-bubble" style={{ left: bubble.x, top: bubble.y }} onMouseDown={(e) => e.preventDefault()}>
+                  <button onClick={() => editor.current?.wrap('**')} title="굵게 (Ctrl+B)">
+                    <b>가</b>
                   </button>
-                )}
-              </div>
+                  <button onClick={() => editor.current?.wrap('*')} title="기울임 (Ctrl+I)">
+                    <i>가</i>
+                  </button>
+                  <button onClick={() => editor.current?.wrap('[[', ']]')} title="세계관 항목으로 잇기 (Ctrl+K)">
+                    [[ ]]
+                  </button>
+                  <button onClick={() => editor.current?.wrap('%%', '%%')} title="작가 메모로 (Ctrl+/) — 리더에는 안 보여요">
+                    메모
+                  </button>
+                  <button onClick={() => editor.current?.wrap('> ', '')} title="인용">
+                    인용
+                  </button>
+                </div>
+              )}
               <Editor
                 key={`${sel.id}:${edKey}`}
                 ref={editor}
                 doc={sel.body ?? ''}
                 onChange={(d) => onBody(sel.id, d)}
                 onSelection={setSelChars}
+                onSelectRect={setBubble}
                 entries={refs}
                 focusMode={prefs.focus}
                 typewriterMode={prefs.typewriter}
                 dialogueTint={prefs.dialogue}
+                nameComplete={prefs.names}
                 onLinkClick={(name) => {
                   const e = entriesOf(items).find((x) => x.name === name || x.aliases.includes(name));
                   if (e && book.world_id) go(`worlds/${book.world_id}/entries/${e.id}`);

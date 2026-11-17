@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { go } from '../../lib/router';
 import { loadFull, toReadNodes, type FullBook } from '../../lib/store';
-import { Icon, Spinner, toast } from '../../lib/ui';
+import { Spinner, toast } from '../../lib/ui';
 import { makeEpub } from '../../lib/epub';
 import { download } from '../../lib/exporters';
 import { Reader } from './Reader';
@@ -53,18 +53,10 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
       initialFind={find ?? undefined}
       start={nodeId ? { n: nodeId, o: Number(at ?? 0) } : null}
       onExit={() => (history.length > 1 ? history.back() : go('library'))}
-      extraButtons={
-        <>
-          <button className="icon-btn" aria-label="전자책(EPUB)으로 받기" title="전자책(EPUB)으로 받기 — 폰 책 앱 · 전자책 단말기에서 읽기" onClick={() => download(`${data.book.title}.epub`, new Blob([makeEpub(data.book, nodes) as BlobPart], { type: 'application/epub+zip' }))}>
-            <Icon name="download" />
-          </button>
-          {data.book.kind === 'write' ? (
-          <a className="icon-btn" href={`#/write/${bookId}`} aria-label="집필실에서 고치기" title="집필실에서 고치기">
-            <Icon name="pen" />
-          </a>
-        ) : null}
-        </>
-      }
+      actions={[
+        ...(data.book.kind === 'write' ? [{ label: '집필실에서 고치기', icon: 'pen', href: `#/write/${bookId}` }] : []),
+        { label: '전자책(EPUB)으로 받기', icon: 'download', onClick: () => download(`${data.book.title}.epub`, new Blob([makeEpub(data.book, nodes) as BlobPart], { type: 'application/epub+zip' })) },
+      ]}
     />
   );
 }

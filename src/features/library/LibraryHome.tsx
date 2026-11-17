@@ -5,7 +5,7 @@ import { useSession } from '../../lib/session';
 import { splitMarkdown } from '../../lib/split';
 import { cacheMyBooks, cachedBooks, cachedKeys, createBookFrom } from '../../lib/store';
 import { useEffect } from 'react';
-import { idb } from '../../lib/idb';
+import { idb, local } from '../../lib/idb';
 import { ago } from '../../lib/text';
 import type { Book } from '../../lib/types';
 import { confirmBox, Empty, Icon, Menu, Spinner, toast, useAsync } from '../../lib/ui';
@@ -32,11 +32,26 @@ export async function importSeed(nickname: string) {
   return createBookFrom({ title: s.title, author: nickname, kind: 'write', nodes: s.nodes, notes, color: '#1f2c4a', meta: { template: 'seed-dawn' } });
 }
 
+export const fmtMinutes = (secs: number) => {
+  const m = Math.round(secs / 60);
+  return m >= 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m}분`;
+};
+
 export function LibraryHome() {
   const { user } = useSession();
   const [importing, setImporting] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [offline, setOffline] = useState(false);
+  const [sort, setSort] = useState<'updated' | 'read' | 'title'>(() => local.get('libSort', 'updated'));
+  const [weekRead, setWeekRead] = useState(0);
+  useEffect(() => {
+    api<{ read: { day: string; secs: number }[] }>('stats')
+      .then((r) => {
+        const since = new Date(Date.now() - 6 * 86_400_000).toLocaleDateString('sv-SE');
+        setWeekRead(r.read.filter((d) => d.day >= since).reduce((s, d) => s + d.secs, 0));
+      })
+      .catch(() => {});
+  }, []);
   const [onDevice, setOnDevice] = useState<Set<string>>(new Set());
   const { data, loading, error, reload } = useAsync(async () => {
     try {
@@ -75,8 +90,26 @@ export function LibraryHome() {
   const { books, progress, shared } = data!;
   const dev = (id: string) => (onDevice.has(id) ? '기기에 있음' : '');
   const live = books.filter((b) => !b.deleted);
-  const mine = live.filter((b) => b.kind === 'write');
-  const read = live.filter((b) => b.kind === 'read');
+  const order = (list: Book[]) =>
+    [...list].sort((a, b) =>
+      sort === 'title' ? a.title.localeCompare(b.title, 'ko') : sort === 'read' ? (progress[`b:${b.id}`]?.at ?? 0) - (progress[`b:${a.id}`]?.at ?? 0) : b.updated - a.updated,
+    );
+  const mine = order(live.filter((b) => b.kind === 'write'));
+  const read = order(live.filter((b) => b.kind === 'read'));
+  const SORTS = { updated: '최근 고친 순', read: '최근 읽은 순', title: '제목 순' } as const;
+  const sortMenu = (
+    <Menu label="정렬" text={SORTS[sort]}>
+      {(close) => (
+        <>
+          {(Object.keys(SORTS) as (keyof typeof SORTS)[]).map((k) => (
+            <button key={k} className={sort === k ? 'on' : ''} onClick={() => (close(), setSort(k), local.set('libSort', k))}>
+              {SORTS[k]}
+            </button>
+          ))}
+        </>
+      )}
+    </Menu>
+  );
   const trash = books.filter((b) => b.deleted);
   const prog = (key: string) => progress[key];
   // 이어 읽기: 가장 최근에 읽은 것
@@ -94,20 +127,34 @@ export function LibraryHome() {
       <div className="page-head">
         <div>
           <h1>서재</h1>
-          <p className="sub">내가 쓴 책, 들인 책, 친구가 공유한 책을 한곳에서 읽어요.</p>
+          <p className="sub">
+            내가 쓴 책, 들인 책, 친구가 공유한 책을 한곳에서 읽어요.
+            {!!weekRead && <> · 최근 7일 {fmtMinutes(weekRead)} 읽음</>}
+          </p>
         </div>
         <div className="actions">
-          <a className="btn" href="#/lines">
-            밑줄 모음
-          </a>
-          <a className="btn" href="#/discover">
-            <Icon name="compass" size={16} />
-            자유 이용 책 찾기
-          </a>
           <button className="primary" onClick={() => setImporting(true)}>
-            <Icon name="upload" size={16} />
-            파일로 들이기
+            <Icon name="plus" size={16} />
+            책 들이기
           </button>
+          <Menu label="더 보기">
+            {(close) => (
+              <>
+                <button onClick={() => (close(), go('discover'))}>
+                  <Icon name="compass" size={16} />
+                  자유 이용 책 찾기
+                </button>
+                <button onClick={() => (close(), go('lines'))}>
+                  <Icon name="bookmark" size={16} />
+                  밑줄 모음
+                </button>
+                <button onClick={() => (close(), go('search'))}>
+                  <Icon name="search" size={16} />
+                  모든 책 본문 찾기
+                </button>
+              </>
+            )}
+          </Menu>
         </div>
       </div>
 
@@ -139,6 +186,7 @@ export function LibraryHome() {
       <section className="section">
         <div className="section-head">
           <h2>내가 쓴 책</h2>
+          {mine.length > 1 && sortMenu}
           <span className="count">{mine.length}권</span>
           <a className="more small" href="#/studio">
             집필실로 →
@@ -207,6 +255,7 @@ export function LibraryHome() {
       <section className="section">
         <div className="section-head">
           <h2>들인 책</h2>
+          {read.length > 1 && sortMenu}
           <span className="count">{read.length}권</span>
         </div>
         {read.length ? (
@@ -246,6 +295,10 @@ export function LibraryHome() {
               </div>
             ))}
           </div>
+        ) : live.length ? (
+          <p className="muted small">
+            가지고 있는 EPUB · TXT · PDF · Word 파일을 <button className="link-btn" onClick={() => setImporting(true)}>들이거나</button>, 저작권이 끝난 책을 <a href="#/discover">찾아</a> 넣을 수 있어요.
+          </p>
         ) : (
           <Empty
             title="들인 책이 없어요"

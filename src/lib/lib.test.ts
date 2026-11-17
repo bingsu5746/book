@@ -105,3 +105,37 @@ describe('세계관 항목 한꺼번에 넣기', () => {
     expect(parseBulk('X-23 - 실험체')).toEqual([{ name: 'X-23', aliases: [], summary: '실험체' }]);
   });
 });
+
+import { checkSpelling } from './spell';
+const fixAll = (t: string) => {
+  let s = t;
+  for (let k = 0; k < 20; k++) {
+    const i = checkSpelling(s).filter((x) => x.kind !== '확인')[0];
+    if (!i) break;
+    s = s.slice(0, i.from) + i.fix + s.slice(i.to);
+  }
+  return s;
+};
+describe('맞춤법 검사 (기본 규칙)', () => {
+  it('자주 틀리는 말', () => {
+    expect(fixAll('그렇게 되요. 몇일 뒤에 할께요.')).toBe('그렇게 돼요. 며칠 뒤에 할게요.');
+    expect(fixAll('오랫만에 일일히 깨끗히 했다.')).toBe('오랜만에 일일이 깨끗이 했다.');
+    expect(fixAll('그건 내 거에요. 학생이였다.')).toBe('그건 내 거예요. 학생이었다.');
+    expect(fixAll('갈꺼야')).toBe('갈 거야');
+  });
+  it('띄어쓰기', () => {
+    expect(fixAll('할수있다. 할 수있다. 할 수 있다.')).toBe('할 수 있다. 할 수 있다. 할 수 있다.');
+    expect(fixAll('그럴것같다. 안하고 싶다. 편안하다.')).toBe('그럴 것 같다. 안 하고 싶다. 편안하다.');
+    expect(fixAll('끝났다.그리고  갔다.')).toBe('끝났다. 그리고 갔다.');
+  });
+  it('문장 부호', () => {
+    expect(fixAll('글쎄... 그래 .')).toBe('글쎄… 그래.');
+  });
+  it('틀리지 않은 말은 건드리지 않는다', () => {
+    const ok = '선생님께 갔다. 불을 꺼야 한다. 그녀는 웃었다. 3.5배. “안녕.” 그가 말했다. 안하무인이다. 수있는 [[홍설께]] %%할께%%';
+    expect(checkSpelling(ok).filter((x) => x.kind !== '확인').map((x) => x.text)).toEqual([]);
+  });
+  it('따옴표 짝', () => {
+    expect(checkSpelling('“안녕 그가 말했다.').some((x) => x.rule === 'quote')).toBe(true);
+  });
+});

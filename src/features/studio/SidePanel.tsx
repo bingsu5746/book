@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { diffWordsWithSpace } from 'diff';
 import { api } from '../../lib/api';
+import { local } from '../../lib/idb';
+import { checkSpelling, type SpellIssue, type SpellKind } from '../../lib/spell';
 import { analyze } from '../../lib/analyze';
 import { ago, fmtDate, fmtNum } from '../../lib/text';
 import { STATUS_LABEL, type BookNode, type Status } from '../../lib/types';
@@ -8,7 +10,7 @@ import { confirmBox, Icon, Modal, promptBox, Spinner, toast } from '../../lib/ui
 import { entriesOf, fieldsFor, kindLabel, mentionedIn, type Entry, type WEvent, type WItem } from '../../lib/world';
 import type { EditorHandle } from './Editor';
 
-export type SideTab = 'info' | 'world' | 'history' | 'revise' | 'notes';
+export type SideTab = 'info' | 'world' | 'spell' | 'history' | 'revise' | 'notes';
 const LABELS = ['', '#c26b4a', '#d9a441', '#3f8a6c', '#4f6fa8', '#8a5ca8', '#77736b'];
 
 export function SidePanel({
@@ -43,6 +45,7 @@ export function SidePanel({
           [
             ['info', '장 정보'],
             ['world', '세계관'],
+            ['spell', '맞춤법'],
             ['history', '기록'],
             ['revise', '퇴고'],
             ['notes', '친구 주석'],
@@ -57,6 +60,7 @@ export function SidePanel({
         {!node && <p className="muted small">왼쪽에서 장을 골라 주세요.</p>}
         {node && tab === 'info' && <Info node={node} items={items} onPatch={onPatch} />}
         {node && tab === 'world' && <WorldTab worldId={worldId} items={items} body={body} editor={editor} onOpenWorld={onOpenWorld} nodeId={node.id} />}
+        {node && tab === 'spell' && <SpellPanel key={node.id} bookId={bookId} body={body} editor={editor} />}
         {node && tab === 'history' && <History node={node} body={body} onRestore={onRestore} />}
         {node && tab === 'revise' && <Revise body={body} editor={editor} />}
         {node && tab === 'notes' && <FriendNotes bookId={bookId} node={node} body={body} editor={editor} />}
@@ -557,6 +561,104 @@ function FriendNotes({ bookId, node, body, editor }: { bookId: string; node: Boo
           </div>
         );
       })}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- 맞춤법
+function SpellPanel({ bookId, body, editor }: { bookId: string; body: string; editor: React.RefObject<EditorHandle | null> }) {
+  const [ignored, setIgnored] = useState<Set<string>>(() => new Set(local.get<string[]>(`spellIgnore:${bookId}`, [])));
+  const issues = useMemo(() => checkSpelling(body, ignored), [body, ignored]);
+  const [kind, setKind] = useState<'' | SpellKind>('');
+  useEffect(() => {
+    editor.current?.setMarks(issues.map((i) => ({ from: i.from, to: i.to, cls: i.kind === '확인' ? 'cm-spell-check' : 'cm-spell' })));
+  }, [issues, editor]);
+  useEffect(() => () => editor.current?.setMarks([]), [editor]);
+  const fix = (i: SpellIssue) => {
+    const v = editor.current?.view;
+    if (!v || v.state.sliceDoc(i.from, i.to) !== i.text) return;
+    v.dispatch({ changes: { from: i.from, to: i.to, insert: i.fix } });
+  };
+  const ignore = (i: SpellIssue) => {
+    const key = i.rule === 'quote' ? `quote|${i.text}|${i.from}` : `${i.rule}|${i.text}`;
+    const next = new Set(ignored).add(key);
+    setIgnored(next);
+    local.set(`spellIgnore:${bookId}`, [...next]);
+  };
+  const shown = issues.filter((i) => !kind || i.kind === kind);
+  const counts = issues.reduce<Record<string, number>>((m, i) => ((m[i.kind] = (m[i.kind] ?? 0) + 1), m), {});
+  return (
+    <>
+      <p className="muted small">자주 틀리는 맞춤법 · 띄어쓰기 · 문장 부호를 기본 규칙으로 찾아요. 모든 틀린 곳을 찾지는 못하고, 「확인」은 문맥에 따라 맞을 수도 있어요.</p>
+      {!issues.length ? (
+        <p className="note-box">이 장에서 찾은 곳이 없어요.</p>
+      ) : (
+        <>
+          <div className="row wrap">
+            <button className={`chip${!kind ? ' on' : ''}`} onClick={() => setKind('')}>
+              전체 {issues.length}
+            </button>
+            {(['맞춤법', '띄어쓰기', '문장 부호', '확인'] as SpellKind[]).map((k) =>
+              counts[k] ? (
+                <button key={k} className={`chip${kind === k ? ' on' : ''}`} onClick={() => setKind(k)}>
+                  {k} {counts[k]}
+                </button>
+              ) : null,
+            )}
+          </div>
+          <button
+            className="small"
+            onClick={() => {
+              // 하나 고칠 때마다 다시 검사한다 (겹쳐 있던 다른 틀린 곳이 드러날 수 있어서)
+              const v = editor.current?.view;
+              if (!v) return;
+              for (let k = 0; k < 500; k++) {
+                const next = checkSpelling(v.state.doc.toString(), ignored).find((x) => x.kind !== '확인' && (!kind || x.kind === kind) && x.fix !== x.text);
+                if (!next) break;
+                fix(next);
+              }
+            }}
+          >
+            「확인」 빼고 모두 고치기
+          </button>
+          <div className="stack" style={{ gap: 8 }}>
+            {shown.map((i) => (
+              <div key={`${i.from}:${i.rule}`} className="note" style={{ cursor: 'pointer' }} onClick={() => editor.current?.select(i.from, i.to)}>
+                <div className="who">
+                  <span className="chip" style={{ padding: '0 6px' }}>
+                    {i.kind}
+                  </span>
+                </div>
+                <div style={{ fontFamily: 'var(--serif)', margin: '4px 0' }}>
+                  <del style={{ color: 'var(--bad)' }}>{i.text}</del> → <b>{i.fix}</b>
+                </div>
+                <div className="tiny muted">{i.why}</div>
+                <div className="row" style={{ marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
+                  {i.fix !== i.text && (
+                    <button className="small primary" onClick={() => fix(i)}>
+                      고치기
+                    </button>
+                  )}
+                  <button className="small ghost" onClick={() => ignore(i)}>
+                    넘어가기
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {!!ignored.size && (
+        <button
+          className="ghost small"
+          onClick={() => {
+            setIgnored(new Set());
+            local.set(`spellIgnore:${bookId}`, []);
+          }}
+        >
+          넘어간 것 {ignored.size}개 다시 보기
+        </button>
+      )}
     </>
   );
 }

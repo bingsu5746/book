@@ -8,7 +8,7 @@ import type { DraftNode } from '../../lib/split';
 import { createBookFrom } from '../../lib/store';
 import { ago, fmtNum, today } from '../../lib/text';
 import type { Book } from '../../lib/types';
-import { Empty, Icon, Modal, Spinner, toast, useAsync } from '../../lib/ui';
+import { Empty, Icon, Menu, Modal, Spinner, toast, useAsync } from '../../lib/ui';
 import { ImportDialog } from '../library/ImportDialog';
 import { importSeed } from '../library/LibraryHome';
 import { Heatmap, streakOf } from './Views';
@@ -126,13 +126,17 @@ export function StudioHome() {
           <p className="sub">책을 쓰고 고치는 곳. 원고는 쓰는 대로 저장되고, 기기를 바꿔도 이어서 써요.</p>
         </div>
         <div className="actions">
-          <button onClick={() => setImporting(true)}>
-            <Icon name="upload" size={16} />
-            원고 파일 들이기
-          </button>
           <button className="primary" onClick={() => setNewOpen(true)}>
             <Icon name="plus" size={16} />새 책
           </button>
+          <Menu label="더 보기">
+            {(close) => (
+              <button onClick={() => (close(), setImporting(true))}>
+                <Icon name="upload" size={16} />
+                원고 파일 들이기
+              </button>
+            )}
+          </Menu>
         </div>
       </div>
       <div className="stat-grid" style={{ marginBottom: 20 }}>

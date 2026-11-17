@@ -306,6 +306,18 @@ function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry:
         <span className="grow" />
         {!ro && (
           <button
+            className="small ghost"
+            onClick={() => {
+              const copy: Entry = { ...e, id: newItemId(), name: `${e.name} 사본`, image: undefined };
+              put(copy, true);
+              go(`worlds/${worldId}/entries/${copy.id}`);
+            }}
+          >
+            복제
+          </button>
+        )}
+        {!ro && (
+          <button
             className="small danger"
             onClick={async () => {
               if (!(await confirmBox(`「${e.name}」을(를) 지울까요?`, { danger: true, ok: '지우기', detail: '이 항목과 이어진 관계도 함께 지워져요.' }))) return;
