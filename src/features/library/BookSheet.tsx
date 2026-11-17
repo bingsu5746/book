@@ -20,6 +20,8 @@ export interface SheetBook {
   blurb?: string;
   blurbLabel?: string;
   facts: string[];
+  /** 꺼내 본 자리에서 할 수 있는 일 (들인 책: 집필실로 · 휴지통) */
+  actions?: { label: string; onClick: () => void | Promise<void>; danger?: boolean }[];
   progress?: { f?: number; at: number } | null;
   /** 첫 문장 · 차례를 찾을 곳: 내 책(b:id) 또는 친구 판(e:editionId) */
   source: { kind: 'book'; id: string } | { kind: 'edition'; id: string };
@@ -165,6 +167,11 @@ export function BookSheet({ book, from, onClose }: { book: SheetBook; from: HTML
                 집필실에서
               </a>
             )}
+            {book.actions?.map((a) => (
+              <button key={a.label} className={`ghost small${a.danger ? ' danger' : ''}`} onClick={() => void a.onClick()}>
+                {a.label}
+              </button>
+            ))}
           </div>
           {blurb && (
             <section>

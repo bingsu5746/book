@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../lib/api';
-import { BookCard, charsLabel, Cover } from '../../lib/BookCard';
+import { charsLabel, Cover } from '../../lib/BookCard';
+import { Desk, Manuscript, Shelf, Spine } from './Bookcase';
 import type { CoverStyle } from '../../lib/cover';
 import { useSession } from '../../lib/session';
 import { splitMarkdown } from '../../lib/split';
@@ -9,7 +10,7 @@ import { useEffect } from 'react';
 import { idb, local } from '../../lib/idb';
 import { ago } from '../../lib/text';
 import type { Book } from '../../lib/types';
-import { confirmBox, Empty, Icon, Menu, Spinner, toast, useAsync } from '../../lib/ui';
+import { confirmBox, Icon, Menu, Spinner, toast, useAsync } from '../../lib/ui';
 import { ImportDialog } from './ImportDialog';
 import { BookSheet, type SheetBook } from './BookSheet';
 import { go } from '../../lib/router';
@@ -99,6 +100,10 @@ export function LibraryHome() {
       sort === 'title' ? a.title.localeCompare(b.title, 'ko') : sort === 'read' ? (progress[`b:${b.id}`]?.at ?? 0) - (progress[`b:${a.id}`]?.at ?? 0) : b.updated - a.updated,
     );
   const mine = order(live.filter((b) => b.kind === 'write'));
+  // 다 쓴 책(탈고 · 해설집)은 책장에, 아직 쓰는 원고는 책상에
+  const isDone = (b: Book) => !!b.meta.finishedAt || !!b.meta.analysisOf;
+  const finished = mine.filter(isDone);
+  const drafts = mine.filter((b) => !isDone(b));
   const readAll = order(live.filter((b) => b.kind === 'read'));
   const read = readAll.filter((b) => !readFilter || (b.meta.readStatus ?? 'reading') === readFilter);
   const doneThisYear = readAll.filter((b) => b.meta.readStatus === 'done' && (b.meta.finishedAt ?? '').startsWith(String(new Date().getFullYear()))).length;
@@ -143,7 +148,31 @@ export function LibraryHome() {
         return { ...base, writeHref: `#/write/${b.id}`, blurb: blurb || plot, blurbLabel: blurb ? '소개' : '구상 줄거리 · 나만 보여요', facts: [charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', `${ago(b.updated)} 고침`] };
       }
       const st = b.meta.readStatus === 'done' ? `다 읽음${b.meta.finishedAt ? ` ${b.meta.finishedAt}` : ''}` : b.meta.readStatus === 'want' ? '읽고 싶어요' : '';
-      return { ...base, blurb: String(b.meta.blurb ?? '').trim(), facts: [st, b.meta.readStars ? '★'.repeat(b.meta.readStars) : '', charsLabel(b.total_chars)] };
+      return {
+        ...base,
+        blurb: String(b.meta.blurb ?? '').trim(),
+        facts: [st, b.meta.readStars ? '★'.repeat(b.meta.readStars) : '', charsLabel(b.total_chars)],
+        actions: [
+          {
+            label: '집필실에서 고치기',
+            onClick: async () => {
+              await api(`books/${b.id}`, { method: 'PATCH', body: { kind: 'write' } });
+              toast('내 원고로 옮겼어요. 집필실에서 고칠 수 있어요.');
+              go(`write/${b.id}`);
+            },
+          },
+          {
+            label: '휴지통에 넣기',
+            danger: true,
+            onClick: async () => {
+              if (!(await confirmBox(`「${b.title}」을(를) 휴지통에 넣을까요?`, { ok: '휴지통에 넣기', danger: true, detail: '30일 안에 되살릴 수 있어요.' }))) return;
+              await api(`books/${b.id}`, { method: 'DELETE' });
+              setSheet(null);
+              reload();
+            },
+          },
+        ],
+      };
     }
     const sh = shared.find((x) => x.edition_id === m[2]);
     if (!sh) return null;
@@ -151,12 +180,12 @@ export function LibraryHome() {
   };
   const onCardClick = (e: React.MouseEvent) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a.card');
-    if (!a) return;
+    const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a.card, a.spine, a.ms');
+    if (!a || a.classList.contains('ms-new')) return;
     const book = sheetFor(a.getAttribute('href') ?? '');
     if (!book) return;
     e.preventDefault();
-    setSheet({ book, from: a.querySelector<HTMLElement>('.thumb') });
+    setSheet({ book, from: a.querySelector<HTMLElement>('.thumb') ?? a });
   };
 
   return (
@@ -170,6 +199,7 @@ export function LibraryHome() {
           </p>
         </div>
         <div className="actions">
+          {live.length > 1 && sortMenu}
           <Menu label="더하기 · 더 보기" icon="plus" btnClass="round-add">
             {(close) => (
               <>
@@ -221,159 +251,86 @@ export function LibraryHome() {
         </a>
       )}
 
-      <section className="section">
-        <div className="section-head">
-          <h2>내가 쓴 책</h2>
-          {mine.length > 1 && <span className="reveal" style={{ marginLeft: 'auto' }}>{sortMenu}</span>}
-          <span className="count">{mine.length}권</span>
-        </div>
-        {mine.length ? (
-          <div className="cards">
-            {mine.map((b) => (
-              <BookCard key={b.id} title={b.title} by={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '']} />
-            ))}
-          </div>
-        ) : (
-          <Empty
-            title="아직 쓴 책이 없어요"
-            action={
-              <>
-                <a className="btn primary" href="#/studio">
-                  새 책 쓰기
-                </a>
-                {!hasSeed && (
-                  <button
-                    disabled={seeding}
-                    onClick={async () => {
-                      setSeeding(true);
-                      try {
-                        const b = await importSeed(user.nickname);
-                        toast(`「${b.title}」을(를) 가져왔어요`);
-                        reload();
-                      } catch (e) {
-                        toast((e as Error).message, 'err');
-                      } finally {
-                        setSeeding(false);
-                      }
-                    }}
-                  >
-                    {seeding ? '가져오는 중…' : '「새벽을 건너는 꿈」 가져오기'}
+      <div className="bookcase">
+        <Shelf
+          title="다 쓴 책"
+          count={finished.length}
+          empty={<>「다 썼어요」(집필실 ⋯ 메뉴)를 누른 책이 여기 꽂혀요. 쓰는 중인 원고는 아래 책상에 있어요.</>}
+        >
+          {finished.map((b) => (
+            <Spine key={b.id} b={{ id: b.id, title: b.title, author: b.author, color: b.color, chars: b.total_chars, href: `#/read/${b.id}`, progress: prog(`b:${b.id}`)?.f ?? null }} />
+          ))}
+        </Shelf>
+        <Shelf title="친구의 책" count={shared.length} empty={<>친구가 책을 공유하면 여기 꽂혀요.</>}>
+          {shared.map((s) => (
+            <Spine key={s.id} b={{ id: s.id, title: s.title, author: s.owner_name, color: s.color, chars: s.chars, href: `#/edition/${s.edition_id}`, progress: prog(`e:${s.id}`)?.f ?? null, note: `${s.edition}판` }} />
+          ))}
+        </Shelf>
+        <Shelf
+          title="들인 책"
+          count={read.length}
+          tools={
+            readAll.length > 1 ? (
+              <div className="seg shelf-seg">
+                {(
+                  [
+                    ['', '전체'],
+                    ['reading', '읽는 중'],
+                    ['done', '다 읽음'],
+                    ['want', '읽고 싶어요'],
+                  ] as const
+                ).map(([k, l]) => (
+                  <button key={k || 'all'} className={readFilter === k ? 'on' : ''} onClick={() => setReadFilter(k)}>
+                    {l}
                   </button>
-                )}
-              </>
-            }
-          >
-            집필실에서 새 책을 시작하거나, 아티팩트 서재에 있던 「새벽을 건너는 꿈」을 원고로 가져올 수 있어요.
-          </Empty>
-        )}
-      </section>
-
-      <section className="section">
-        <div className="section-head">
-          <h2>친구의 책</h2>
-          <span className="count">{shared.length}권</span>
-        </div>
-        {shared.length ? (
-          <div className="cards">
-            {shared.map((s) => (
-              <BookCard key={s.id} title={s.title} by={s.owner_name} color={s.color} seed={s.id} href={`#/edition/${s.edition_id}`} progress={prog(`e:${s.id}`)?.f ?? null} meta={[`${s.edition}판`, charsLabel(s.chars), s.stars ? `★ ${s.stars.toFixed(1)}` : '']} />
-            ))}
-          </div>
-        ) : (
-          <p className="muted small">친구가 책을 공유하면 여기에 보여요.</p>
-        )}
-      </section>
-
-      <section className="section">
-        <div className="section-head">
-          <h2>들인 책</h2>
-          {readAll.length > 1 && <span className="reveal" style={{ marginLeft: 'auto' }}>{sortMenu}</span>}
-          {readAll.length > 1 && (
-            <div className="seg reveal">
-              {(
-                [
-                  ['', '전체'],
-                  ['reading', '읽는 중'],
-                  ['done', '다 읽음'],
-                  ['want', '읽고 싶어요'],
-                ] as const
-              ).map(([k, l]) => (
-                <button key={k || 'all'} className={readFilter === k ? 'on' : ''} onClick={() => setReadFilter(k)}>
-                  {l}
-                </button>
-              ))}
-            </div>
-          )}
-          <span className="count">{read.length}권</span>
-          <a className="find-link" href="#/discover">
-            무료 책 찾기
-          </a>
-        </div>
-        {read.length ? (
-          <div className="cards">
-            {read.map((b) => (
-              <div key={b.id} style={{ position: 'relative' }}>
-                <BookCard title={b.title} by={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[b.meta.readStatus === 'done' ? `다 읽음${b.meta.finishedAt ? ` ${b.meta.finishedAt.slice(5).replace('-', '.')}` : ''}` : b.meta.readStatus === 'want' ? '읽고 싶어요' : '', b.meta.readStars ? '★'.repeat(b.meta.readStars) : '', charsLabel(b.total_chars)]} />
-                <div style={{ position: 'absolute', top: 6, right: 6 }}>
-                  <Menu label="책 메뉴">
-                    {(close) => (
-                      <>
-                        <button
-                          onClick={async () => {
-                            close();
-                            await api(`books/${b.id}`, { method: 'PATCH', body: { kind: 'write' } });
-                            toast('내 원고로 옮겼어요. 집필실에서 고칠 수 있어요.');
-                            go(`write/${b.id}`);
-                          }}
-                        >
-                          집필실에서 고치기
-                        </button>
-                        <button
-                          className="danger"
-                          onClick={async () => {
-                            close();
-                            if (!(await confirmBox(`「${b.title}」을(를) 휴지통에 넣을까요?`, { ok: '휴지통에 넣기', danger: true, detail: '30일 안에 되살릴 수 있어요.' }))) return;
-                            await api(`books/${b.id}`, { method: 'DELETE' });
-                            reload();
-                          }}
-                        >
-                          휴지통에 넣기
-                        </button>
-                      </>
-                    )}
-                  </Menu>
-                </div>
+                ))}
               </div>
-            ))}
-            <a className="card add" href="#/discover">
-              <span className="serif">무료 책 찾기</span>
-              <span className="faint tiny">저작권이 끝난 책을 검색해 바로 넣어요</span>
-            </a>
-          </div>
-        ) : readAll.length ? (
-          <p className="muted small">이 표시에 맞는 책이 없어요.</p>
-        ) : live.length ? (
-          <p className="muted small">
-            가지고 있는 EPUB · TXT · PDF · Word 파일을 <button className="link-btn" onClick={() => setImporting(true)}>들이거나</button>, 저작권이 끝난 책을 <a href="#/discover">찾아</a> 넣을 수 있어요.
-          </p>
-        ) : (
-          <Empty
-            title="들인 책이 없어요"
-            action={
-              <>
-                <button className="primary" onClick={() => setImporting(true)}>
-                  파일로 들이기
-                </button>
-                <a className="btn" href="#/discover">
-                  자유 이용 책 찾기
-                </a>
-              </>
-            }
+            ) : undefined
+          }
+          empty={readAll.length ? <>이 표시에 맞는 책이 없어요.</> : <>가지고 있는 EPUB · TXT · PDF · Word 파일을 들이거나, 저작권이 끝난 책을 찾아 넣을 수 있어요.</>}
+        >
+          {read.map((b) => (
+            <Spine key={b.id} b={{ id: b.id, title: b.title, author: b.author, color: b.color, chars: b.total_chars, href: `#/read/${b.id}`, progress: prog(`b:${b.id}`)?.f ?? null }} />
+          ))}
+          <button className="spine-add" onClick={() => setImporting(true)}>
+            <span>+ 책 들이기</span>
+          </button>
+          <a className="spine-add" href="#/discover">
+            <span>무료 책 찾기</span>
+          </a>
+        </Shelf>
+      </div>
+
+      <Desk count={drafts.length}>
+        {drafts.map((b) => (
+          <Manuscript key={b.id} b={{ id: b.id, title: b.title, author: b.author, chars: b.total_chars ?? 0, chapters: b.node_count ?? 0, updated: b.updated, href: `#/read/${b.id}`, shared: b.shared ? (b.last_edition ? `${b.last_edition}판 공유` : '공유 중') : '' }} />
+        ))}
+        <a className="ms ms-new" href="#/studio">
+          <span className="ms-title">+ 새 원고</span>
+          <span className="ms-meta">집필실에서 새 책 시작</span>
+        </a>
+        {!mine.length && !hasSeed && (
+          <button
+            className="ms ms-new"
+            disabled={seeding}
+            onClick={async () => {
+              setSeeding(true);
+              try {
+                const b = await importSeed(user.nickname);
+                toast(`「${b.title}」을(를) 가져왔어요`);
+                reload();
+              } catch (e) {
+                toast((e as Error).message, 'err');
+              } finally {
+                setSeeding(false);
+              }
+            }}
           >
-            가지고 있는 EPUB · TXT · PDF · Word 파일을 들이거나, 저작권이 끝난 책을 찾아 넣을 수 있어요.
-          </Empty>
+            <span className="ms-title">{seeding ? '가져오는 중…' : '「새벽을 건너는 꿈」 가져오기'}</span>
+            <span className="ms-meta">예시 원고</span>
+          </button>
         )}
-      </section>
+      </Desk>
 
       {!!trash.length && (
         <section className="section">

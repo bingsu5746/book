@@ -468,12 +468,20 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         <button className="icon-btn" aria-label="집필실로" onClick={() => go('studio')}>
           <Icon name="back" />
         </button>
-        <button className="icon-btn" aria-label="원고 목록" aria-pressed={prefs.binder} onClick={() => (innerWidth <= 820 ? setMobile(mobile === 'binder' ? '' : 'binder') : setPrefs({ binder: !prefs.binder }))}>
-          <Icon name="list" />
+        <button
+          className="ghost small binder-btn"
+          title={(innerWidth <= 820 ? mobile === 'binder' : prefs.binder) ? '왼쪽 원고 목록(부 · 장) 닫기' : '왼쪽 원고 목록(부 · 장) 열기'}
+          aria-label="원고 목록 열고 닫기"
+          aria-pressed={innerWidth <= 820 ? mobile === 'binder' : prefs.binder}
+          onClick={() => (innerWidth <= 820 ? setMobile(mobile === 'binder' ? '' : 'binder') : setPrefs({ binder: !prefs.binder }))}
+        >
+          <Icon name="panel" size={18} />
+          <span className="binder-label">목록</span>
         </button>
         <Menu label="보기 고르기" icon="layers" text={view === 'write' ? book.title : `${book.title} · ${VIEW_LABEL[view]}`} btnClass="book-name">
           {(close) => (
             <>
+              <p className="menu-cap">이 책을 어떻게 볼까요</p>
               {VIEWS.map((k) => (
                 <button key={k} className={view === k ? 'on' : ''} onClick={() => (close(), setView(k))}>
                   <Icon name={VIEW_ICON[k]} size={16} />

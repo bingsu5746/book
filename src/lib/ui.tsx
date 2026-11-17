@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
 // ---------- 아이콘 (가는 선) ----------
@@ -18,6 +19,7 @@ const P: Record<string, string> = {
   download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
   trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
   list: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
+  panel: 'M4 5h16v14H4zM9.5 5v14',
   grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
   clock: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3 2',
   chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
@@ -209,16 +211,37 @@ export function SubNav<T extends string>({ items, value, onChange }: { items: { 
 export function Menu({ label, children, icon = 'more', text, btnClass = '' }: { label: string; children: (close: () => void) => ReactNode; icon?: string; text?: string; btnClass?: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<React.CSSProperties>({ visibility: 'hidden' });
   useEffect(() => {
     if (!open) return;
-    const h = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const h = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node) && setOpen(false);
     const k = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    const away = (e: Event) => !menuRef.current?.contains(e.target as Node) && setOpen(false);
     document.addEventListener('mousedown', h);
     addEventListener('keydown', k);
+    addEventListener('resize', away);
+    addEventListener('scroll', away, true);
     return () => {
       document.removeEventListener('mousedown', h);
       removeEventListener('keydown', k);
+      removeEventListener('resize', away);
+      removeEventListener('scroll', away, true);
     };
+  }, [open]);
+  // 메뉴는 화면 맨 위 층(body)에 띄운다: 원고 목록 · 머리줄처럼 넘친 글을 자르는 칸 안에서도 가려지지 않게
+  useLayoutEffect(() => {
+    if (!open) return setPos({ visibility: 'hidden' });
+    const b = ref.current?.getBoundingClientRect();
+    const m = menuRef.current;
+    if (!b || !m) return;
+    const w = m.offsetWidth;
+    const h = m.offsetHeight;
+    const vw = innerWidth;
+    const vh = innerHeight;
+    const left = Math.min(Math.max(8, b.right - w), vw - w - 8);
+    const below = b.bottom + 4 + h <= vh - 8 || b.top < vh / 2;
+    setPos({ left: b.right - w < 8 ? Math.max(8, b.left) : left, top: below ? Math.min(b.bottom + 4, vh - 8 - Math.min(h, vh - 16)) : Math.max(8, b.top - 4 - h) });
   }, [open]);
   return (
     <div className="menu-wrap" ref={ref}>
@@ -234,7 +257,13 @@ export function Menu({ label, children, icon = 'more', text, btnClass = '' }: { 
           <Icon name={icon} />
         </button>
       )}
-      {open && <div className="menu">{children(() => setOpen(false))}</div>}
+      {open &&
+        createPortal(
+          <div className="menu floating" ref={menuRef} role="menu" aria-label={label} style={pos}>
+            {children(() => setOpen(false))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
