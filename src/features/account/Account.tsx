@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
 import { download } from '../../lib/exporters';
 import { idb, local } from '../../lib/idb';
@@ -13,6 +13,12 @@ export function Account() {
   const [theme, setTheme] = useState(local.get<string>('theme', 'auto'));
   const [pw, setPw] = useState({ current: '', password: '' });
   const [restoring, setRestoring] = useState('');
+  const [prefs, setPrefs] = useState<{ autoAnalysis?: boolean; [k: string]: unknown }>({});
+  useEffect(() => {
+    api<{ prefs: Record<string, unknown> }>('prefs')
+      .then((r) => setPrefs(r.prefs ?? {}))
+      .catch(() => {});
+  }, []);
 
   const applyTheme = (t: string) => {
     setTheme(t);
@@ -69,6 +75,22 @@ export function Account() {
               </button>
             ))}
           </div>
+        </section>
+        <section className="panel stack">
+          <h3 className="serif">분석집</h3>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={prefs.autoAnalysis !== false}
+              onChange={async (e) => {
+                const next = { ...prefs, autoAnalysis: e.target.checked };
+                setPrefs(next);
+                await api('prefs', { method: 'PUT', body: { prefs: next } }).catch((x) => toast((x as Error).message, 'err'));
+              }}
+            />
+            「다 썼어요」를 누르거나 판을 찍을 때 AI 분석집 자동으로 만들기
+          </label>
+          <p className="muted small">AI 가 원고 전체를 읽고 줄거리 · 인물 · 사건 · 물건 · 주제 · 해설을 담은 책을 만들어요. 책마다 집필실 「책 설정」에서 직접 만들 수도 있어요.</p>
         </section>
         <section className="panel stack">
           <h3 className="serif">닉네임</h3>

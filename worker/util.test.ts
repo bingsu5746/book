@@ -82,3 +82,37 @@ describe('AI 줄거리 요약 도우미', () => {
     expect(synopsisMessages('t', '본문 %%비밀 메모%% [[홍설|설이]]')[1].content).toBe('장 제목: t\n\n원고:\n본문  설이');
   });
 });
+
+import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, sectionMessages } from './analysis';
+describe('분석집', () => {
+  const note = parseChapterNote('설명입니다 ```json\n{"summary":"홍설이 깬다.","characters":[{"name":"홍설","doing":"깬다","traits":["조용함"]}],"events":[{"what":"깸","why":"시작"}],"objects":[{"name":"거울","meaning":"기억"}],"places":[],"motifs":["오전 8시"],"lines":["홍설은 꽃밭에서 눈을 떴다."]}\n```');
+  it('장 메모 JSON 을 읽는다 (앞뒤 군말이 있어도)', () => {
+    expect(note.summary).toBe('홍설이 깬다.');
+    expect(note.characters[0]).toEqual({ name: '홍설', doing: '깬다', traits: ['조용함'] });
+    expect(parseChapterNote('그냥 글').summary).toBe('그냥 글');
+    expect(parseChapterNote('{망가진').summary).toBe('{망가진');
+  });
+  it('부분마다 필요한 자료만 모은다', () => {
+    const ch = [{ title: '1장', part: '1부', note }];
+    expect(digest(ch, 'characters')).toContain('인물 홍설');
+    expect(digest(ch, 'characters')).not.toContain('물건 거울');
+    expect(digest(ch, 'things')).toContain('물건 거울');
+    expect(digest(ch, 'afterword')).toContain('「홍설은 꽃밭에서 눈을 떴다.」');
+  });
+  it('장별 줄거리는 메모로 엮고, 부가 바뀔 때 머리를 단다', () => {
+    const t = chapterSummaries([
+      { title: 'a', part: '1부', note },
+      { title: 'b', part: '1부', note },
+      { title: 'c', part: '2부', note },
+    ]);
+    expect(t.match(/### /g)?.length).toBe(2);
+    expect(t).toContain('**[3] c**');
+  });
+  it('지어내지 말라는 지시가 늘 들어간다', () => {
+    expect(chapterMessages('책', '장', '본문')[0].content).toContain('지어내지 않는다');
+    expect(sectionMessages('책', 'afterword', '자료', '')[0].content).toContain('지어내지 않는다');
+  });
+  it('부분 글 맨 앞 큰 제목은 걷어 낸다', () => {
+    expect(cleanSection('## 인물 분석\n\n### 홍설\n내용')).toBe('### 홍설\n내용');
+  });
+});

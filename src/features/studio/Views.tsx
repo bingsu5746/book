@@ -11,6 +11,7 @@ import { confirmBox, Icon, promptBox, Spinner, toast, useAsync } from '../../lib
 import type { World } from '../../lib/world';
 import { Editor, type EntryRef } from './Editor';
 import { EditionDiff } from './EditionDiff';
+import { AnalysisPanel } from './AnalysisPanel';
 
 const STATUS_COLOR: Record<string, string> = { '': 'var(--line-strong)', idea: '#b9b2a3', draft: '#d9a441', revise: '#c26b4a', done: '#3f8a6c' };
 
@@ -319,7 +320,7 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
     try {
       const r = await api(`books/${book.id}/publish`, { body: { note, share_world: shareWorld } });
       setShared(true);
-      toast(`${r.edition.number}판을 공유했어요`);
+      toast(r.analysis ? `${r.edition.number}판을 공유했어요. 분석집도 만들기 시작했어요.` : `${r.edition.number}판을 공유했어요`);
       void loadEd();
     } catch (e) {
       toast((e as Error).message, 'err');
@@ -488,6 +489,7 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
         </section>
       )}
       {cmp && <EditionDiff editionId={cmp.id} number={cmp.number} nodes={nodes} onClose={() => setCmp(null)} />}
+      <AnalysisPanel book={book} />
       <section className="panel stack">
         <h3 className="serif">책 종류</h3>
         <p className="muted small">지금: {book.kind === 'write' ? '내 원고' : '들인 책 (서재의 「들인 책」에 보이고 공유할 수 없어요)'}</p>

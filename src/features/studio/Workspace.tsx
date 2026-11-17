@@ -433,6 +433,23 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                 </>
               )}
               <button onClick={() => (close(), go(`read/${bookId}${sel ? '/' + sel.id : ''}`))}>리더로 미리 보기</button>
+              {!book.meta.analysisOf && (
+                <button
+                  onClick={async () => {
+                    close();
+                    if (!(await confirmBox('다 썼어요!', { ok: '탈고 표시', detail: '이 책에 다 쓴 날을 남겨요. 「분석집 자동으로 만들기」가 켜져 있으면 AI 가 원고 전체를 읽고 해설집을 만들기 시작해요(계정에서 끄기).' }))) return;
+                    try {
+                      const r = await api<{ started: boolean; note: string }>(`books/${bookId}/finish`, { body: {} });
+                      setData((d) => (d ? { ...d, book: { ...d.book, meta: { ...d.book.meta, finishedAt: new Date().toLocaleDateString('sv-SE') } } } : d));
+                      toast(r.started ? '수고했어요! 분석집을 만들기 시작했어요. 책 설정에서 진행을 볼 수 있어요.' : r.note || '다 쓴 날을 남겼어요.');
+                    } catch (e) {
+                      toast((e as Error).message, 'err');
+                    }
+                  }}
+                >
+                  다 썼어요 (탈고 · 분석집 만들기)
+                </button>
+              )}
               {view === 'write' && (
                 <button onClick={() => (close(), innerWidth <= 820 ? setMobile(mobile === 'side' ? '' : 'side') : setPrefs({ side: !prefs.side }))}>
                   {prefs.side ? '곁 패널 숨기기' : '곁 패널 (장 정보 · 세계관 · 기록 …)'}

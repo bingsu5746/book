@@ -15,6 +15,9 @@ import { charsNoSpace, cutText, inviteOk, Limiter, passwordProblem, readCookie, 
 import { gutenbergFile, gutenbergSearch, wikisourcePage, wikisourceSearch } from './external';
 import { flattenTree, snippets } from './util';
 import { cleanSynopsis, FALLBACK, MODEL, modelInput, readOutput, synopsisMessages } from './ai';
+import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, SECTIONS, sectionMessages, type ChapterNote } from './analysis';
+/** 한 사람이 하루에 시작할 수 있는 분석집 수 */
+const ANALYSIS_DAILY = 5;
 /** 한 사람이 하루에 부를 수 있는 AI 요약 수 (무료 한도를 지키려고) */
 const AI_DAILY = 60;
 
@@ -175,6 +178,10 @@ export class Library extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS images_world ON images (world_id);
       CREATE TABLE IF NOT EXISTS read_daily (user_id TEXT NOT NULL, day TEXT NOT NULL, secs INTEGER NOT NULL, PRIMARY KEY (user_id, day));
       CREATE TABLE IF NOT EXISTS write_daily (user_id TEXT NOT NULL, day TEXT NOT NULL, secs INTEGER NOT NULL, PRIMARY KEY (user_id, day));
+      CREATE TABLE IF NOT EXISTS analysis_notes (node_id TEXT PRIMARY KEY, hash TEXT NOT NULL, note TEXT NOT NULL, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS analysis_jobs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, book_id TEXT NOT NULL, status TEXT NOT NULL, phase TEXT NOT NULL, step INTEGER NOT NULL,
+        total INTEGER NOT NULL, state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL, next_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS analysis_jobs_book ON analysis_jobs (book_id);
       CREATE TABLE IF NOT EXISTS ai_usage (user_id TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (user_id, day));
       CREATE TABLE IF NOT EXISTS jots (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS jots_user ON jots (user_id);
@@ -329,6 +336,26 @@ export class Library extends DurableObject<Env> {
     if ((r = m(/^books\/([a-z0-9]+)\/rating$/)) && method === 'PUT') return this.rate(user, r[1], b);
     if ((r = m(/^books\/([a-z0-9]+)\/snapshots$/)) && method === 'GET') return this.bookSnapshots(user, r[1]);
     if ((r = m(/^books\/([a-z0-9]+)\/readers$/)) && method === 'GET') return this.readers(user, r[1]);
+    if ((r = m(/^books\/([a-z0-9]+)\/analysis$/))) {
+      if (method === 'GET') return this.analysisStatus(user, r[1]);
+      if (method === 'POST') {
+        if (b.action === 'cancel') {
+          this.ownBook(user, r[1]);
+          this.sql.exec("UPDATE analysis_jobs SET status = 'canceled', updated = ? WHERE book_id = ? AND status = 'running'", Date.now(), r[1]);
+          return this.analysisStatus(user, r[1]);
+        }
+        const started = await this.startAnalysis(user, r[1]);
+        if (typeof started === 'string') return fail(started, started.includes('하루') ? 429 : 400);
+        return this.analysisStatus(user, r[1]);
+      }
+    }
+    if ((r = m(/^books\/([a-z0-9]+)\/finish$/)) && method === 'POST') {
+      const book = this.ownBook(user, r[1]);
+      const meta = { ...parseJson(book.meta), finishedAt: new Date().toISOString().slice(0, 10) };
+      this.sql.exec('UPDATE books SET meta = ? WHERE id = ?', JSON.stringify(meta), r[1]);
+      const started = this.autoAnalysisOn(user) && !meta.analysisOf ? await this.startAnalysis(user, r[1]) : null;
+      return json({ ok: true, started: started === true, note: typeof started === 'string' ? started : '' });
+    }
 
     if ((r = m(/^nodes\/([a-z0-9]+)$/))) {
       if (method === 'GET') return this.getNode(user, r[1]);
@@ -503,7 +530,7 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('DELETE FROM images WHERE world_id = ?', w.id);
       this.sql.exec('DELETE FROM worlds WHERE id = ?', w.id);
     }
-    for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'read_daily', 'write_daily', 'jots', 'ai_usage', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
+    for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'read_daily', 'write_daily', 'jots', 'ai_usage', 'analysis_jobs', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
     this.sql.exec('UPDATE annotations SET deleted = ?, body = ? WHERE author = ?', Date.now(), '', user.id);
     this.sql.exec('DELETE FROM users WHERE id = ?', user.id);
     return json({ ok: true }, 200, { 'set-cookie': clearCookie() });
@@ -988,7 +1015,7 @@ export class Library extends DurableObject<Env> {
   }
 
   // ---------------------------------------------------------------- 열람실
-  private publish(user: UserRow, bookId: string, b: Body) {
+  private async publish(user: UserRow, bookId: string, b: Body) {
     const book = this.ownBook(user, bookId);
     if (book.kind !== 'write') return fail('내가 쓴 책만 공유할 수 있어요. (들인 책은 나만 볼 수 있어요)', 403);
     const nodes = flattenTree(this.rows<NodeRow>('SELECT id, parent_id, sort, kind, title, body FROM nodes WHERE book_id = ? AND deleted IS NULL', bookId)).filter((n) => n.kind !== 'note');
@@ -1000,7 +1027,9 @@ export class Library extends DurableObject<Env> {
     this.sql.exec('INSERT INTO editions (id, book_id, number, note, title, subtitle, author, color, chars, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, bookId, number, str(b.note, 1000), full.title, full.subtitle, full.author, full.color, chars, Date.now());
     nodes.forEach((n, i) => this.sql.exec('INSERT INTO edition_nodes (edition_id, node_id, sort, depth, kind, title, body) VALUES (?, ?, ?, ?, ?, ?, ?)', id, n.id, i, n.depth, n.kind, n.title, n.body));
     this.sql.exec('UPDATE books SET shared = 1, share_world = ? WHERE id = ?', b.share_world ? 1 : 0, bookId);
-    return json({ edition: { id, number } });
+    let analysis = false;
+    if (this.autoAnalysisOn(user) && !parseJson(full.meta).analysisOf) analysis = (await this.startAnalysis(user, bookId)) === true;
+    return json({ edition: { id, number }, analysis });
   }
   private unshare(user: UserRow, bookId: string) {
     this.ownBook(user, bookId);
@@ -1028,6 +1057,183 @@ export class Library extends DurableObject<Env> {
     if (!text) return fail('AI 가 요약을 만들지 못했어요. 잠시 뒤 다시 해 주세요.', 502);
     this.sql.exec('INSERT INTO ai_usage (user_id, day, n) VALUES (?, ?, 1) ON CONFLICT (user_id, day) DO UPDATE SET n = n + 1', user.id, day);
     return json({ synopsis: text, left: AI_DAILY - used - 1 });
+  }
+
+  // ---------------------------------------------------------------- 분석집 (작품 해설)
+  private autoAnalysisOn(user: UserRow): boolean {
+    const p = parseJson(this.one('SELECT data FROM prefs WHERE user_id = ?', user.id)?.data) as { autoAnalysis?: boolean };
+    return p.autoAnalysis !== false;
+  }
+  private analysisStatus(user: UserRow, bookId: string) {
+    const book = this.ownBook(user, bookId);
+    const row = this.one('SELECT id, status, phase, step, total, error, created, updated, next_at, state FROM analysis_jobs WHERE book_id = ? ORDER BY created DESC LIMIT 1', bookId);
+    let job: Row | null = null;
+    if (row) {
+      // 진행: 장 읽기 → 해설 쓰기 → 엮기 를 한 줄로 이어서 센다
+      const units = ((parseJson(row.state) as { units?: unknown[] }).units ?? []).length;
+      const step = Number(row.step);
+      const done = row.status === 'done' ? Number(row.total) : row.phase === 'chapters' ? step : row.phase === 'sections' ? units + step : units + SECTIONS.length;
+      const { state: _s, ...rest } = row;
+      void _s;
+      job = { ...rest, step: done };
+    }
+    const aid = (parseJson(book.meta) as { analysisBookId?: string }).analysisBookId;
+    const exists = aid ? this.one('SELECT id FROM books WHERE id = ? AND owner = ? AND deleted IS NULL', aid, user.id) : null;
+    return json({ job, analysisBookId: exists ? aid : null, auto: this.autoAnalysisOn(user) });
+  }
+  /** 분석집 만들기를 시작한다. 이미 만드는 중이면 그대로. 막히면 까닭(글) */
+  private async startAnalysis(user: UserRow, bookId: string): Promise<true | string> {
+    const book = this.ownBook(user, bookId);
+    if ((parseJson(book.meta) as { analysisOf?: string }).analysisOf) return '해설집은 다시 분석하지 않아요.';
+    if (this.one("SELECT id FROM analysis_jobs WHERE book_id = ? AND status = 'running'", bookId)) return true;
+    const day = new Date().toISOString().slice(0, 10);
+    const n = Number(this.one('SELECT COUNT(*) AS n FROM analysis_jobs WHERE user_id = ? AND created >= ?', user.id, Date.parse(day))?.n ?? 0);
+    if (n >= ANALYSIS_DAILY) return `분석집은 하루 ${ANALYSIS_DAILY}번까지 만들 수 있어요. 내일 다시 해 주세요.`;
+    const all = flattenTree(this.rows<NodeRow>('SELECT id, parent_id, sort, kind, title, body FROM nodes WHERE book_id = ? AND deleted IS NULL', bookId));
+    const units: { id: string; title: string; part: string }[] = [];
+    let part = '';
+    for (const x of all) {
+      if (x.kind === 'part') part = x.title;
+      else if (x.kind !== 'note' && x.body.replace(/\s/g, '').length >= 50) units.push({ id: x.id, title: x.title, part: x.depth === 0 ? '' : part });
+    }
+    if (!units.length) return '분석할 원고가 없어요.';
+    const now = Date.now();
+    this.sql.exec(
+      "INSERT INTO analysis_jobs (id, user_id, book_id, status, phase, step, total, state, created, updated, next_at) VALUES (?, ?, ?, 'running', 'chapters', 0, ?, ?, ?, ?, ?)",
+      newId(),
+      user.id,
+      bookId,
+      units.slice(0, 300).length + SECTIONS.length + 1,
+      JSON.stringify({ units: units.slice(0, 300), sections: {}, retries: 0 }),
+      now,
+      now,
+      now,
+    );
+    await this.ctx.storage.setAlarm(now + 100);
+    return true;
+  }
+  private async callAI(messages: unknown[], max: number): Promise<string> {
+    if (this.env.FAKE_AI === '1') {
+      // 개발용 (wrangler dev 에서는 Workers AI 를 부를 수 없다): 모양만 맞는 가짜 답
+      const isChapter = String((messages[0] as { content?: string })?.content ?? '').includes('메모를 남긴다');
+      return isChapter ? JSON.stringify({ summary: '가짜 요약: 이 장에서 일이 일어난다.', characters: [{ name: '홍설', doing: '꽃밭에 간다', traits: ['조용함'] }], events: [{ what: '꽃밭에 감', why: '시작' }], objects: [{ name: '거울', meaning: '기억' }], places: [{ name: '파빌리온', meaning: '쉼' }], motifs: ['오전 8시'], lines: ['홍설은 꽃밭에서 눈을 떴다.'] }) : '가짜 해설 문단입니다. [1] 장을 근거로 씁니다.';
+    }
+    if (!this.env.AI) throw new Error('AI 연결이 없어요');
+    let last: unknown = null;
+    for (const model of [MODEL, FALLBACK]) {
+      try {
+        const t = readOutput(await this.env.AI.run(model as never, modelInput(model, messages, max) as never));
+        if (t) return t;
+      } catch (e) {
+        last = e;
+        console.error('analysis ai', model, e instanceof Error ? e.message : String(e));
+      }
+    }
+    throw last instanceof Error ? last : new Error('AI 가 답하지 않았어요');
+  }
+  async alarm() {
+    const job = this.one<Row & { id: string; book_id: string; user_id: string; phase: string; step: number; state: string }>("SELECT * FROM analysis_jobs WHERE status = 'running' AND next_at <= ? ORDER BY next_at LIMIT 1", Date.now());
+    if (job) {
+      try {
+        await this.stepAnalysis(job);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const st = parseJson(job.state) as { retries?: number };
+        const quota = /exceeded|limit|quota|neuron|capacity|429|4006/i.test(msg);
+        const retries = (st.retries ?? 0) + 1;
+        if (quota || retries <= 3) {
+          // 한도에 걸리면 한 시간 뒤, 그 밖의 오류는 조금 뒤에 다시
+          this.sql.exec('UPDATE analysis_jobs SET state = ?, error = ?, next_at = ?, updated = ? WHERE id = ?', JSON.stringify({ ...st, retries: quota ? st.retries ?? 0 : retries }), quota ? 'AI 무료 한도에 걸려 잠시 쉬었다가 이어서 만들어요.' : '', Date.now() + (quota ? 3600_000 : 60_000 * retries), Date.now(), job.id);
+        } else this.sql.exec("UPDATE analysis_jobs SET status = 'error', error = ?, updated = ? WHERE id = ?", 'AI 가 여러 번 답하지 않아 멈췄어요. 다시 만들기를 눌러 주세요.', Date.now(), job.id);
+      }
+    }
+    const next = this.one("SELECT MIN(next_at) AS t FROM analysis_jobs WHERE status = 'running'");
+    if (next?.t != null) await this.ctx.storage.setAlarm(Math.max(Date.now() + 300, Number(next.t)));
+  }
+  private async stepAnalysis(job: { id: string; book_id: string; user_id: string; phase: string; step: number; state: string }) {
+    const st = parseJson(job.state) as { units: { id: string; title: string; part: string }[]; sections: Record<string, string>; retries?: number };
+    const book = this.one<BookRow & { meta: string }>('SELECT * FROM books WHERE id = ? AND deleted IS NULL', job.book_id);
+    if (!book) return this.sql.exec("UPDATE analysis_jobs SET status = 'canceled', updated = ? WHERE id = ?", Date.now(), job.id);
+    const save = (phase: string, step: number, extra: Record<string, unknown> = {}) =>
+      this.sql.exec('UPDATE analysis_jobs SET phase = ?, step = ?, state = ?, error = ?, updated = ?, next_at = ? WHERE id = ?', phase, step, JSON.stringify({ ...st, retries: 0, ...extra }), '', Date.now(), Date.now(), job.id);
+    if (job.phase === 'chapters') {
+      // 바뀌지 않은 장은 지난번 메모를 그대로 쓴다 (한 번에 여러 장 넘어감)
+      let i = job.step;
+      while (i < st.units.length) {
+        const u = st.units[i];
+        const node = this.one<NodeRow>('SELECT id, title, body FROM nodes WHERE id = ?', u.id);
+        if (!node) {
+          i++;
+          continue;
+        }
+        const hash = await sha256(node.body);
+        const cached = this.one('SELECT hash FROM analysis_notes WHERE node_id = ?', u.id);
+        if (cached?.hash === hash) {
+          i++;
+          continue;
+        }
+        const note = parseChapterNote(await this.callAI(chapterMessages(book.title, node.title, node.body), 1600));
+        this.sql.exec('INSERT OR REPLACE INTO analysis_notes (node_id, hash, note, at) VALUES (?, ?, ?, ?)', u.id, hash, JSON.stringify(note), Date.now());
+        i++;
+        break;
+      }
+      return i >= st.units.length ? save('sections', 0) : save('chapters', i);
+    }
+    const blank: ChapterNote = { summary: '', characters: [], events: [], objects: [], places: [], motifs: [], lines: [] };
+    const chapters = st.units.map((u) => ({ title: u.title, part: u.part, note: Object.assign({}, blank, parseJson(this.one('SELECT note FROM analysis_notes WHERE node_id = ?', u.id)?.note)) as ChapterNote }));
+    if (job.phase === 'sections') {
+      const sec = SECTIONS[job.step];
+      if (!sec) return save('write', 0);
+      let world = '';
+      if (book.world_id) {
+        const items = this.rows<{ data: string }>("SELECT data FROM witems WHERE world_id = ? AND type = 'entry' AND deleted IS NULL LIMIT 200", book.world_id).map((x) => parseJson(x.data) as { name?: string; summary?: string });
+        world = items
+          .filter((x) => x.name)
+          .map((x) => `${x.name}: ${x.summary ?? ''}`)
+          .join('\n')
+          .slice(0, 4000);
+      }
+      const text = cleanSection(await this.callAI(sectionMessages(book.title, sec.key, digest(chapters, sec.key), world), sec.key === 'afterword' ? 3000 : 2400));
+      st.sections[sec.key] = text;
+      return save('sections', job.step + 1);
+    }
+    // 책으로 엮기
+    const meta = parseJson(book.meta) as Record<string, unknown>;
+    let aid = typeof meta.analysisBookId === 'string' ? meta.analysisBookId : '';
+    const now = Date.now();
+    if (aid && this.one('SELECT id FROM books WHERE id = ? AND owner = ? AND deleted IS NULL', aid, job.user_id)) {
+      this.sql.exec('UPDATE nodes SET deleted = ? WHERE book_id = ? AND deleted IS NULL', now, aid);
+      this.sql.exec('UPDATE books SET updated = ?, title = ? WHERE id = ?', now, `《${book.title}》 해설`, aid);
+    } else {
+      aid = newId();
+      this.sql.exec(
+        "INSERT INTO books (id, owner, kind, title, subtitle, author, color, meta, created, updated) VALUES (?, ?, 'write', ?, ?, ?, ?, ?, ?, ?)",
+        aid,
+        job.user_id,
+        `《${book.title}》 해설`,
+        '줄거리 · 인물 · 사건 · 물건 · 주제',
+        'AI 해설 (검토 필요)',
+        book.color ?? '',
+        JSON.stringify({ analysisOf: book.id, template: 'analysis', coverStyle: 'minimal' }),
+        now,
+        now,
+      );
+      this.sql.exec('UPDATE books SET meta = ? WHERE id = ?', JSON.stringify({ ...meta, analysisBookId: aid }), book.id);
+    }
+    const parts: [string, string][] = [
+      ['읽기 전에', `이 해설은 ${new Date().toISOString().slice(0, 10)}에 AI 가 《${book.title}》 원고 ${st.units.length}개 장을 읽고 쓴 것이에요. 원고에 있는 것만 근거로 쓰게 했지만, 잘못 읽은 곳이 있을 수 있으니 작가가 확인하고 고쳐 주세요. 이 책은 집필실에서 자유롭게 고칠 수 있어요.\n\n본문의 [숫자]는 「장별 줄거리」의 장 번호예요.`],
+      ['작품 개요와 줄거리', st.sections.overview ?? ''],
+      ['장별 줄거리', chapterSummaries(chapters)],
+      ['인물 분석', st.sections.characters ?? ''],
+      ['사건의 흐름', st.sections.events ?? ''],
+      ['중요한 물건과 장소', st.sections.things ?? ''],
+      ['주제와 모티프', st.sections.themes ?? ''],
+      ['해설', st.sections.afterword ?? ''],
+    ];
+    parts.forEach(([title, body], k) =>
+      this.sql.exec("INSERT INTO nodes (id, book_id, parent_id, kind, sort, title, body, chars, rev, updated) VALUES (?, ?, NULL, 'chapter', ?, ?, ?, ?, 1, ?)", newId(), aid, k + 1, title, body, charsNoSpace(body), now),
+    );
+    this.sql.exec("UPDATE analysis_jobs SET status = 'done', phase = 'done', step = total, updated = ? WHERE id = ?", now, job.id);
   }
 
   /** 작가에게: 친구가 공유본을 어디까지 읽었나 */
