@@ -34,7 +34,7 @@ interface WsPrefs {
   names: boolean;
   quotes: boolean;
 }
-const DEFAULT_PREFS: WsPrefs = { binder: true, side: true, focus: false, typewriter: false, dialogue: false, fs: 17, width: 44, sideTab: 'info', names: true, quotes: false };
+const DEFAULT_PREFS: WsPrefs = { binder: true, side: false, focus: false, typewriter: false, dialogue: false, fs: 17, width: 44, sideTab: 'info', names: true, quotes: false };
 
 export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string }) {
   const [data, setData] = useState<FullBook | null>(null);
@@ -265,6 +265,32 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
     if (findQ && sel && view === 'write') setTimeout(() => editor.current?.find(findQ), 200);
   }, [findQ, sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** AI 줄거리 요약: 서버가 원고를 읽어 요약을 돌려주면 장 정보에 저장한다 */
+  const summarize = async (n: BookNode): Promise<string> => {
+    // 아직 못 보낸 글이 있으면 먼저 보낸다 (서버는 저장된 원고를 읽는다)
+    await saveBody(n.id, bookId, n.body ?? '', revs.current.get(n.id) ?? n.rev);
+    const r = await api<{ synopsis: string }>('ai/synopsis', { body: { node_id: n.id } });
+    const meta = { ...n.meta, synopsisAi: true, synopsisChars: charsNoSpace(n.body ?? '') };
+    updateNode(n.id, { synopsis: r.synopsis, meta });
+    await api(`nodes/${n.id}`, { method: 'PATCH', body: { synopsis: r.synopsis, meta } }).catch(() => {});
+    return r.synopsis;
+  };
+  // 장을 떠날 때: 줄거리가 비었거나(또는 AI 가 쓴 요약인데 원고가 많이 바뀌었으면) 저절로 요약
+  const prevSel = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevSel.current;
+    prevSel.current = sel?.id ?? null;
+    if (!prev || prev === sel?.id || data?.book.meta.autoSynopsis === false || !navigator.onLine) return;
+    const n = data?.nodes.find((x) => x.id === prev);
+    if (!n || n.deleted || n.kind === 'part' || n.kind === 'note') return;
+    const chars = charsNoSpace(n.body ?? '');
+    if (chars < 200) return;
+    const was = Number(n.meta.synopsisChars ?? 0);
+    const stale = n.meta.synopsisAi && was && Math.abs(chars - was) / was > 0.15;
+    if (n.synopsis.trim() && !stale) return;
+    void summarize(n).catch(() => {});
+  }, [sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 쓰던 장을 기억해 두었다가 다음에 그 장으로 연다
   useEffect(() => {
     if (sel) local.set(`lastNode:${bookId}`, sel.id);
@@ -358,9 +384,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         <button className="icon-btn" aria-label="원고 목록" aria-pressed={prefs.binder} onClick={() => (innerWidth <= 820 ? setMobile(mobile === 'binder' ? '' : 'binder') : setPrefs({ binder: !prefs.binder }))}>
           <Icon name="list" />
         </button>
-        <span className="book-name grow">{book.title}</span>
-        <span className={`status${save.error ? ' err' : ''}`}>{save.error ? '기기에 저장됨 · 연결되면 보내요' : save.pending || timers.current.size ? '저장 중…' : '저장됨'}</span>
-        <Menu label="보기 고르기" icon="layers" text={VIEW_LABEL[view]}>
+        <Menu label="보기 고르기" icon="layers" text={view === 'write' ? book.title : `${book.title} · ${VIEW_LABEL[view]}`} btnClass="book-name">
           {(close) => (
             <>
               {VIEWS.map((k) => (
@@ -372,9 +396,8 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             </>
           )}
         </Menu>
-        <a className="icon-btn" href={`#/read/${bookId}${sel ? '/' + sel.id : ''}`} aria-label="리더로 미리 보기" title="리더로 미리 보기">
-          <Icon name="book" />
-        </a>
+        <span className="grow" />
+        <span className={`save-dot${save.error ? ' err' : save.pending || timers.current.size ? ' busy' : ''}`} role="status" title={save.error ? '기기에 저장됨 · 연결되면 보내요' : save.pending || timers.current.size ? '저장 중…' : '저장됨'} aria-label={save.error ? '기기에 저장됨, 연결되면 보내요' : save.pending || timers.current.size ? '저장 중' : '저장됨'} />
         <Menu label="더 보기">
           {(close) => (
             <>
@@ -409,6 +432,16 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   <hr />
                 </>
               )}
+              <button onClick={() => (close(), go(`read/${bookId}${sel ? '/' + sel.id : ''}`))}>리더로 미리 보기</button>
+              {view === 'write' && (
+                <button onClick={() => (close(), innerWidth <= 820 ? setMobile(mobile === 'side' ? '' : 'side') : setPrefs({ side: !prefs.side }))}>
+                  {prefs.side ? '곁 패널 숨기기' : '곁 패널 (장 정보 · 세계관 · 기록 …)'}
+                </button>
+              )}
+              <button onClick={() => (close(), patchBook({ meta: { ...book.meta, autoSynopsis: book.meta.autoSynopsis === false } }))}>
+                {book.meta.autoSynopsis === false ? '줄거리 AI 요약 저절로 켜기' : '줄거리 AI 요약 저절로 끄기'}
+              </button>
+              <hr />
               <button onClick={() => (close(), setPrefs({ focus: !prefs.focus }))}>{prefs.focus ? '집중 모드 끄기' : '집중 모드 (지금 문단만)'}</button>
               <button onClick={() => (close(), setPrefs({ typewriter: !prefs.typewriter }))}>{prefs.typewriter ? '타자기 모드 끄기' : '타자기 모드 (쓰는 줄을 가운데)'}</button>
               <button onClick={() => (close(), setPrefs({ dialogue: !prefs.dialogue }))}>{prefs.dialogue ? '대사 색 끄기' : '대사에 옅은 색'}</button>
@@ -438,11 +471,6 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             </>
           )}
         </Menu>
-        {view === 'write' && (
-          <button className="icon-btn" aria-label="곁 패널" aria-pressed={prefs.side} onClick={() => (innerWidth <= 820 ? setMobile(mobile === 'side' ? '' : 'side') : setPrefs({ side: !prefs.side }))}>
-            <Icon name="layers" />
-          </button>
-        )}
       </header>
 
       {jotPick && (
@@ -488,9 +516,9 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         {view === 'write' &&
           (sel ? (
             <>
-              <div className="ed-head row">
+              <div className="ed-head row reveal-wrap">
                 <input className="grow" key={sel.id} defaultValue={sel.title} placeholder={`${KIND_LABEL[sel.kind]} 제목`} aria-label="제목" onBlur={(e) => e.target.value !== sel.title && patchNode(sel.id, { title: e.target.value })} />
-                <button className="quiet-btn" onClick={openSpell} title="맞춤법 검사 (F7)">
+                <button className="quiet-btn reveal" onClick={openSpell} title="맞춤법 검사 (F7)">
                   <Icon name="check" size={15} />
                   맞춤법
                 </button>
@@ -616,6 +644,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             setEdKey((k) => k + 1);
           }}
           onOpenWorld={() => setView('settings')}
+          summarize={summarize}
         />
       )}
     </div>

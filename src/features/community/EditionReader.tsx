@@ -10,7 +10,7 @@ import { go } from '../../lib/router';
 import { useSession } from '../../lib/session';
 import { ago, fmtDate } from '../../lib/text';
 import type { ReadNode } from '../../lib/types';
-import { confirmBox, Icon, Modal, Spinner, toast } from '../../lib/ui';
+import { confirmBox, Icon, Menu, Modal, Spinner, toast } from '../../lib/ui';
 import { loadPrefs, Reader } from '../library/Reader';
 
 interface Anno {
@@ -244,37 +244,26 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
         <div className="name">
           {d.book.title} <span style={{ color: 'var(--rmuted)', fontWeight: 400 }}>· {d.book.owner_name} · {d.edition.number}판</span>
         </div>
-        {d.editions.length > 1 && (
-          <select
-            value={d.edition.id}
-            onChange={(e) => go(`edition/${e.target.value}`)}
-            aria-label="판 고르기"
-            style={{ font: 'inherit', fontSize: 13, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--rline)', borderRadius: 6, padding: '4px 6px' }}
-          >
-            {d.editions.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.number}판 · {fmtDate(e.created)}
-              </option>
-            ))}
-          </select>
-        )}
-        {d.book.world_id && (
-          <a className="icon-btn" href={`#/worlds/${d.book.world_id}`} aria-label="세계관 보기" title="세계관 보기">
-            <Icon name="globe" />
-          </a>
-        )}
-        {!d.book.mine && (
-          <button className="icon-btn" aria-label="평가하기" title="평가하기" onClick={() => setRating(true)}>
-            <Icon name="star" />
-          </button>
-        )}
-        <button className="icon-btn" aria-label="쪽 넘김으로 읽기" title="쪽 넘김으로 읽기" onClick={() => setPageMode(true)}>
-          <Icon name="book" />
-        </button>
         <button className="icon-btn" aria-label="주석" aria-pressed={pane} onClick={() => setPane(!pane)}>
           <Icon name="comment" />
           {!!roots.filter((a) => !a.resolved).length && <span className="badge">{roots.filter((a) => !a.resolved).length}</span>}
         </button>
+        <Menu label="더 보기">
+          {(close) => (
+            <>
+              <button onClick={() => (close(), setPageMode(true))}>쪽 넘김으로 읽기</button>
+              {!d.book.mine && <button onClick={() => (close(), setRating(true))}>이 책 평가하기</button>}
+              {d.book.world_id && <button onClick={() => (close(), go(`worlds/${d.book.world_id}`))}>세계관 보기</button>}
+              {d.editions.length > 1 && <hr />}
+              {d.editions.length > 1 &&
+                d.editions.map((e) => (
+                  <button key={e.id} className={e.id === d.edition.id ? 'on' : ''} onClick={() => (close(), go(`edition/${e.id}`))}>
+                    {e.number}판 · {fmtDate(e.created)}
+                  </button>
+                ))}
+            </>
+          )}
+        </Menu>
       </div>
       {!isLatest && (
         <div style={{ textAlign: 'center', fontSize: 13, padding: '4px 12px', color: 'var(--rmuted)' }}>

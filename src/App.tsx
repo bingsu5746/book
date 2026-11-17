@@ -27,7 +27,6 @@ const NAV = [
   { id: 'studio', label: '집필실', icon: 'pen' },
   { id: 'worlds', label: '세계관', icon: 'globe' },
   { id: 'hall', label: '열람실', icon: 'people' },
-  { id: 'search', label: '찾기', icon: 'search' },
 ];
 
 function SaveBadge() {
@@ -148,7 +147,7 @@ export function App() {
   else if (top === 'lines') page = <LinesPage />;
   else if (top === 'jots') page = <JotsPage />;
   else page = <LibraryHome />;
-  const navOn = top === 'discover' || top === 'lines' ? 'library' : top;
+  const navOn = top === 'discover' || top === 'lines' || top === 'search' ? 'library' : top === 'jots' ? 'studio' : top;
 
   return (
     <SessionCtx.Provider value={{ user, setUser }}>
@@ -159,6 +158,11 @@ export function App() {
               <img src="/icon.svg" alt="" />
               서재
             </a>
+            <button className="find-btn" onClick={() => dispatchEvent(new Event('quick-jump'))}>
+              <Icon name="search" size={16} />
+              찾기 · 이동
+              <kbd>{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</kbd>
+            </button>
             {NAV.map((n) => (
               <a key={n.id} className={`nav-item${navOn === n.id ? ' on' : ''}`} href={`#/${n.id}`}>
                 <Icon name={n.icon} />
@@ -170,14 +174,6 @@ export function App() {
                 )}
               </a>
             ))}
-            <a className={`nav-item${top === 'jots' ? ' on' : ''}`} href="#/jots">
-              <Icon name="note" />
-              수첩 <span className="faint tiny" style={{ marginLeft: 'auto' }}>{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘J' : 'Ctrl J'}</span>
-            </a>
-            <button className="nav-item" onClick={() => dispatchEvent(new Event('quick-jump'))}>
-              <Icon name="command" />
-              빠른 이동 <span className="faint tiny" style={{ marginLeft: 'auto' }}>{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</span>
-            </button>
             <div className="bottom">
               <SaveBadge />
               <a className={`nav-item${top === 'account' ? ' on' : ''}`} href="#/account">

@@ -63,3 +63,22 @@ describe('구텐베르크', () => {
     expect(readGutendexBook({ title: 'no id' })).toBeNull();
   });
 });
+
+import { cleanSynopsis, clip, readOutput, synopsisMessages } from './ai';
+describe('AI 줄거리 요약 도우미', () => {
+  it('모델 답 모양 셋을 모두 읽는다', () => {
+    expect(readOutput({ response: '가' })).toBe('가');
+    expect(readOutput({ choices: [{ message: { content: '<think>x</think>나' } }] })).toBe('나');
+    expect(readOutput({ output: [{ type: 'reasoning' }, { type: 'message', content: [{ type: 'output_text', text: '다' }] }] })).toBe('다');
+    expect(readOutput(null)).toBe('');
+  });
+  it('머리말 · 목록 기호를 걷어 낸다', () => {
+    expect(cleanSynopsis('요약: - 홍설은 꽃밭에서 깬다.\n- 봉오리를 본다.')).toBe('홍설은 꽃밭에서 깬다. 봉오리를 본다.');
+  });
+  it('긴 원고는 앞뒤를 남기고 줄이며, 작가 메모는 보내지 않는다', () => {
+    const r = clip('가'.repeat(20000), 1000);
+    expect(r.clipped).toBe(true);
+    expect(r.text.length).toBeLessThan(1100);
+    expect(synopsisMessages('t', '본문 %%비밀 메모%% [[홍설|설이]]')[1].content).toBe('장 제목: t\n\n원고:\n본문  설이');
+  });
+});

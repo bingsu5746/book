@@ -55,7 +55,7 @@ export function LibraryHome() {
       })
       .catch(() => {});
   }, []);
-  const [onDevice, setOnDevice] = useState<Set<string>>(new Set());
+  const [, setOnDevice] = useState<Set<string>>(new Set());
   const { data, loading, error, reload } = useAsync(async () => {
     try {
       await api('me');
@@ -91,7 +91,6 @@ export function LibraryHome() {
   if (loading && !data) return <Spinner />;
   if (error) return <div className="error-box">{error}</div>;
   const { books, progress, shared } = data!;
-  const dev = (id: string) => (onDevice.has(id) ? '기기에 있음' : '');
   const live = books.filter((b) => !b.deleted);
   const order = (list: Book[]) =>
     [...list].sort((a, b) =>
@@ -133,23 +132,23 @@ export function LibraryHome() {
         <div>
           <h1>서재</h1>
           <p className="sub">
-            내가 쓴 책, 들인 책, 친구가 공유한 책을 한곳에서 읽어요.
-            {!!weekRead && <> · 최근 7일 {fmtMinutes(weekRead)} 읽음</>}
-            {!!doneThisYear && <> · 올해 {doneThisYear}권 다 읽음</>}
+            {!!weekRead && <>최근 7일 {fmtMinutes(weekRead)} 읽음</>}
+            {!!doneThisYear && <>{weekRead ? ' · ' : ''}올해 {doneThisYear}권 다 읽음</>}
           </p>
         </div>
         <div className="actions">
-          <button className="primary" onClick={() => setImporting(true)}>
-            <Icon name="plus" size={16} />
-            책 들이기
-          </button>
-          <Menu label="더 보기">
+          <Menu label="더하기 · 더 보기" icon="plus" btnClass="round-add">
             {(close) => (
               <>
+                <button onClick={() => (close(), setImporting(true))}>
+                  <Icon name="upload" size={16} />
+                  파일로 책 들이기
+                </button>
                 <button onClick={() => (close(), go('discover'))}>
                   <Icon name="compass" size={16} />
                   자유 이용 책 찾기
                 </button>
+                <hr />
                 <button onClick={() => (close(), go('lines'))}>
                   <Icon name="bookmark" size={16} />
                   밑줄 모음
@@ -192,16 +191,13 @@ export function LibraryHome() {
       <section className="section">
         <div className="section-head">
           <h2>내가 쓴 책</h2>
-          {mine.length > 1 && sortMenu}
+          {mine.length > 1 && <span className="reveal" style={{ marginLeft: 'auto' }}>{sortMenu}</span>}
           <span className="count">{mine.length}권</span>
-          <a className="more small" href="#/studio">
-            집필실로 →
-          </a>
         </div>
         {mine.length ? (
           <div className="cards">
             {mine.map((b) => (
-              <BookCard key={b.id} title={b.title} by={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', dev(b.id)]} />
+              <BookCard key={b.id} title={b.title} by={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '']} />
             ))}
           </div>
         ) : (
@@ -243,14 +239,11 @@ export function LibraryHome() {
         <div className="section-head">
           <h2>친구의 책</h2>
           <span className="count">{shared.length}권</span>
-          <a className="more small" href="#/hall">
-            열람실로 →
-          </a>
         </div>
         {shared.length ? (
           <div className="cards">
             {shared.map((s) => (
-              <BookCard key={s.id} title={s.title} by={s.owner_name} color={s.color} seed={s.id} href={`#/edition/${s.edition_id}`} progress={prog(`e:${s.id}`)?.f ?? null} meta={[`${s.edition}판`, charsLabel(s.chars), s.stars ? `★ ${s.stars.toFixed(1)}` : '', dev(`e:${s.edition_id}`)]} />
+              <BookCard key={s.id} title={s.title} by={s.owner_name} color={s.color} seed={s.id} href={`#/edition/${s.edition_id}`} progress={prog(`e:${s.id}`)?.f ?? null} meta={[`${s.edition}판`, charsLabel(s.chars), s.stars ? `★ ${s.stars.toFixed(1)}` : '']} />
             ))}
           </div>
         ) : (
@@ -261,9 +254,9 @@ export function LibraryHome() {
       <section className="section">
         <div className="section-head">
           <h2>들인 책</h2>
-          {readAll.length > 1 && sortMenu}
+          {readAll.length > 1 && <span className="reveal" style={{ marginLeft: 'auto' }}>{sortMenu}</span>}
           {readAll.length > 1 && (
-            <div className="seg" style={{ marginLeft: 'auto' }}>
+            <div className="seg reveal">
               {(
                 [
                   ['', '전체'],
@@ -284,7 +277,7 @@ export function LibraryHome() {
           <div className="cards">
             {read.map((b) => (
               <div key={b.id} style={{ position: 'relative' }}>
-                <BookCard title={b.title} by={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[b.meta.readStatus === 'done' ? `다 읽음${b.meta.finishedAt ? ` ${b.meta.finishedAt.slice(5).replace('-', '.')}` : ''}` : b.meta.readStatus === 'want' ? '읽고 싶어요' : '', b.meta.readStars ? '★'.repeat(b.meta.readStars) : '', charsLabel(b.total_chars), dev(b.id)]} />
+                <BookCard title={b.title} by={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[b.meta.readStatus === 'done' ? `다 읽음${b.meta.finishedAt ? ` ${b.meta.finishedAt.slice(5).replace('-', '.')}` : ''}` : b.meta.readStatus === 'want' ? '읽고 싶어요' : '', b.meta.readStars ? '★'.repeat(b.meta.readStars) : '', charsLabel(b.total_chars)]} />
                 <div style={{ position: 'absolute', top: 6, right: 6 }}>
                   <Menu label="책 메뉴">
                     {(close) => (

@@ -14,6 +14,9 @@ import { DurableObject } from 'cloudflare:workers';
 import { charsNoSpace, cutText, inviteOk, Limiter, passwordProblem, readCookie, COOKIE_NAME } from './security';
 import { gutenbergFile, gutenbergSearch, wikisourcePage, wikisourceSearch } from './external';
 import { flattenTree, snippets } from './util';
+import { cleanSynopsis, FALLBACK, MODEL, modelInput, readOutput, synopsisMessages } from './ai';
+/** 한 사람이 하루에 부를 수 있는 AI 요약 수 (무료 한도를 지키려고) */
+const AI_DAILY = 60;
 
 const ITER = 100_000;
 const SESSION_DAYS = 90;
@@ -172,6 +175,7 @@ export class Library extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS images_world ON images (world_id);
       CREATE TABLE IF NOT EXISTS read_daily (user_id TEXT NOT NULL, day TEXT NOT NULL, secs INTEGER NOT NULL, PRIMARY KEY (user_id, day));
       CREATE TABLE IF NOT EXISTS write_daily (user_id TEXT NOT NULL, day TEXT NOT NULL, secs INTEGER NOT NULL, PRIMARY KEY (user_id, day));
+      CREATE TABLE IF NOT EXISTS ai_usage (user_id TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (user_id, day));
       CREATE TABLE IF NOT EXISTS jots (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS jots_user ON jots (user_id);
     `);
@@ -275,6 +279,7 @@ export class Library extends DurableObject<Env> {
       if (secs) this.sql.exec('INSERT INTO write_daily (user_id, day, secs) VALUES (?, ?, ?) ON CONFLICT (user_id, day) DO UPDATE SET secs = secs + excluded.secs', user.id, day, secs);
       return json({ ok: true });
     }
+    if (path === 'ai/synopsis' && method === 'POST') return this.aiSynopsis(user, b);
     // 아이디어 수첩
     if (path === 'jots' && method === 'GET') return json({ jots: this.rows('SELECT id, text, done, created, updated FROM jots WHERE user_id = ? ORDER BY done, updated DESC LIMIT 1000', user.id) });
     if (path === 'jots' && method === 'POST') {
@@ -498,7 +503,7 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('DELETE FROM images WHERE world_id = ?', w.id);
       this.sql.exec('DELETE FROM worlds WHERE id = ?', w.id);
     }
-    for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'read_daily', 'write_daily', 'jots', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
+    for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'read_daily', 'write_daily', 'jots', 'ai_usage', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
     this.sql.exec('UPDATE annotations SET deleted = ?, body = ? WHERE author = ?', Date.now(), '', user.id);
     this.sql.exec('DELETE FROM users WHERE id = ?', user.id);
     return json({ ok: true }, 200, { 'set-cookie': clearCookie() });
@@ -1002,6 +1007,29 @@ export class Library extends DurableObject<Env> {
     this.sql.exec('UPDATE books SET shared = 0 WHERE id = ?', bookId);
     return json({ ok: true });
   }
+  /** 장 줄거리 요약 (AI). 저장은 하지 않고 글만 돌려준다 */
+  private async aiSynopsis(user: UserRow, b: Body) {
+    const n = this.ownNode(user, String(b.node_id ?? ''));
+    if (n.body.replace(/\s/g, '').length < 80) return fail('요약하기엔 글이 너무 짧아요.');
+    if (!this.env.AI) return fail('AI 요약을 쓸 수 없어요. (서버에 AI 연결이 없음)', 503);
+    const day = new Date().toISOString().slice(0, 10);
+    const used = Number(this.one('SELECT n FROM ai_usage WHERE user_id = ? AND day = ?', user.id, day)?.n ?? 0);
+    if (used >= AI_DAILY) return fail(`오늘 AI 요약을 ${AI_DAILY}번 다 썼어요. 내일 다시 해 주세요.`, 429);
+    const messages = synopsisMessages(n.title, n.body);
+    let text = '';
+    for (const model of [MODEL, FALLBACK]) {
+      try {
+        text = cleanSynopsis(readOutput(await this.env.AI.run(model as never, modelInput(model, messages) as never)));
+        if (text) break;
+      } catch (e) {
+        console.error('ai synopsis', model, e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (!text) return fail('AI 가 요약을 만들지 못했어요. 잠시 뒤 다시 해 주세요.', 502);
+    this.sql.exec('INSERT INTO ai_usage (user_id, day, n) VALUES (?, ?, 1) ON CONFLICT (user_id, day) DO UPDATE SET n = n + 1', user.id, day);
+    return json({ synopsis: text, left: AI_DAILY - used - 1 });
+  }
+
   /** 작가에게: 친구가 공유본을 어디까지 읽었나 */
   private readers(user: UserRow, bookId: string) {
     this.ownBook(user, bookId);

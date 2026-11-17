@@ -25,6 +25,7 @@ export function SidePanel({
   onRestore,
   bookId,
   onOpenWorld,
+  summarize,
 }: {
   tab: SideTab;
   setTab: (t: SideTab) => void;
@@ -37,6 +38,7 @@ export function SidePanel({
   onRestore: (body: string) => void;
   bookId: string;
   onOpenWorld: () => void;
+  summarize: (n: BookNode) => Promise<string>;
 }) {
   return (
     <aside className="side" aria-label="곁 패널">
@@ -58,7 +60,7 @@ export function SidePanel({
       </div>
       <div className="side-body">
         {!node && <p className="muted small">왼쪽에서 장을 골라 주세요.</p>}
-        {node && tab === 'info' && <Info node={node} items={items} onPatch={onPatch} />}
+        {node && tab === 'info' && <Info node={node} items={items} onPatch={onPatch} summarize={summarize} />}
         {node && tab === 'world' && <WorldTab worldId={worldId} items={items} body={body} editor={editor} onOpenWorld={onOpenWorld} nodeId={node.id} />}
         {node && tab === 'spell' && <SpellPanel key={node.id} bookId={bookId} body={body} editor={editor} />}
         {node && tab === 'history' && <History node={node} body={body} onRestore={onRestore} />}
@@ -69,22 +71,43 @@ export function SidePanel({
   );
 }
 
-function Info({ node, items, onPatch }: { node: BookNode; items: WItem[]; onPatch: (p: Partial<BookNode>) => void }) {
+function Info({ node, items, onPatch, summarize }: { node: BookNode; items: WItem[]; onPatch: (p: Partial<BookNode>) => void; summarize: (n: BookNode) => Promise<string> }) {
   const [syn, setSyn] = useState(node.synopsis);
+  const [aiBusy, setAiBusy] = useState(false);
   const [memo, setMemo] = useState(node.meta.notes ?? '');
   useEffect(() => {
     setSyn(node.synopsis);
     setMemo(node.meta.notes ?? '');
-  }, [node.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [node.id]);
+  useEffect(() => setSyn(node.synopsis), [node.synopsis]); // eslint-disable-line react-hooks/exhaustive-deps
   const people = entriesOf(items).filter((e) => e.kind === 'character');
   const places = entriesOf(items).filter((e) => e.kind === 'place');
   const meta = (k: string, v: unknown) => onPatch({ meta: { ...node.meta, [k]: v } });
   return (
     <>
-      <label className="field">
-        줄거리 요약 (코르크보드 카드에 보여요)
-        <textarea className="input" rows={5} value={syn} onChange={(e) => setSyn(e.target.value)} onBlur={() => syn !== node.synopsis && onPatch({ synopsis: syn })} />
-      </label>
+      <div className="field reveal-wrap">
+        <div className="row">
+          <span className="grow">줄거리 요약{node.meta.synopsisAi ? <span className="faint"> · AI 가 씀</span> : ''}</span>
+          <button
+            className="quiet-btn reveal"
+            disabled={aiBusy}
+            onClick={async () => {
+              setAiBusy(true);
+              try {
+                const r = await summarize(node);
+                setSyn(r);
+              } catch (e) {
+                toast((e as Error).message, 'err');
+              } finally {
+                setAiBusy(false);
+              }
+            }}
+          >
+            {aiBusy ? '요약하는 중…' : syn ? 'AI 로 다시 요약' : 'AI 로 요약'}
+          </button>
+        </div>
+        <textarea className="input" rows={5} value={syn} placeholder="비워 두면 이 장을 떠날 때 AI 가 원고를 읽고 채워요" onChange={(e) => setSyn(e.target.value)} onBlur={() => syn !== node.synopsis && onPatch({ synopsis: syn, meta: { ...node.meta, synopsisAi: false } })} />
+      </div>
       <label className="field">
         상태
         <select className="input" value={node.status} onChange={(e) => onPatch({ status: e.target.value as Status })}>

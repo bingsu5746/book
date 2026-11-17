@@ -6,7 +6,7 @@ import { flatten } from '../../lib/store';
 import { renderMd } from '../../lib/md';
 import { go } from '../../lib/router';
 import { fmtNum } from '../../lib/text';
-import { confirmBox, Empty, Icon, Modal, promptBox, Spinner, SubNav, toast } from '../../lib/ui';
+import { confirmBox, Empty, Icon, Menu, Modal, promptBox, Spinner, SubNav, toast } from '../../lib/ui';
 import { DEFAULT_FIELDS, deleteItems, entriesOf, fieldsFor, KINDS, kindLabel, loadWorld, newItemId, REL_CATS, relColor, saveItems, type Entry, type EntryKind, type RelCat, type Relation, type Template, type Track, type WEvent, type WItem, type WorldData, parseBulk, toRefs } from '../../lib/world';
 import { Editor } from '../studio/Editor';
 import { shrinkImage } from '../../lib/image';
@@ -217,16 +217,20 @@ function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boole
       <div className="row wrap">
         <input className="input grow" style={{ minWidth: 180 }} placeholder="이름 · 내용으로 찾기" value={q} onChange={(e) => setQ(e.target.value)} />
         {!ro && (
-          <select className="input" style={{ width: 'auto' }} value="" onChange={(e) => e.target.value && create(e.target.value as EntryKind)} aria-label="새 항목">
-            <option value="">+ 새 항목</option>
-            {KINDS.map((k) => (
-              <option key={k.id} value={k.id}>
-                {k.label}
-              </option>
-            ))}
-          </select>
+          <Menu label="새 항목" icon="plus" btnClass="round-add">
+            {(close) => (
+              <>
+                {KINDS.map((k) => (
+                  <button key={k.id} onClick={() => (close(), void create(k.id))}>
+                    새 {k.label}
+                  </button>
+                ))}
+                <hr />
+                <button onClick={() => (close(), setBulk(true))}>여러 개 한꺼번에 넣기</button>
+              </>
+            )}
+          </Menu>
         )}
-        {!ro && <button onClick={() => setBulk(true)}>여러 개 한꺼번에</button>}
       </div>
       {bulk && <BulkAdd entries={entries} onClose={() => setBulk(false)} onDone={(es) => es.forEach((e) => onCreate(e, true))} />}
       <div className="row wrap">
@@ -263,7 +267,7 @@ function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boole
           ))}
         </div>
       ) : (
-        <Empty title={entries.length ? '맞는 항목이 없어요' : '첫 항목을 만들어 보세요'}>{!entries.length && !ro && '위의 「+ 새 항목」에서 인물 · 장소 같은 종류를 골라요.'}</Empty>
+        <Empty title={entries.length ? '맞는 항목이 없어요' : '첫 항목을 만들어 보세요'}>{!entries.length && !ro && '오른쪽 위 ＋ 에서 인물 · 장소 같은 종류를 골라요.'}</Empty>
       )}
     </div>
   );
@@ -307,28 +311,33 @@ function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry:
         </a>
         <span className="grow" />
         {!ro && (
-          <button
-            className="small ghost"
-            onClick={() => {
-              const copy: Entry = { ...e, id: newItemId(), name: `${e.name} 사본`, image: undefined };
-              put(copy, true);
-              go(`worlds/${worldId}/entries/${copy.id}`);
-            }}
-          >
-            복제
-          </button>
-        )}
-        {!ro && (
-          <button
-            className="small danger"
-            onClick={async () => {
-              if (!(await confirmBox(`「${e.name}」을(를) 지울까요?`, { danger: true, ok: '지우기', detail: '이 항목과 이어진 관계도 함께 지워져요.' }))) return;
-              await remove([e.id, ...rels.map((r) => r.id)]);
-              go(`worlds/${worldId}/entries`);
-            }}
-          >
-            지우기
-          </button>
+          <Menu label="항목 메뉴">
+            {(close) => (
+              <>
+                <button
+                  onClick={() => {
+                    close();
+                    const copy: Entry = { ...e, id: newItemId(), name: `${e.name} 사본`, image: undefined };
+                    put(copy, true);
+                    go(`worlds/${worldId}/entries/${copy.id}`);
+                  }}
+                >
+                  복제
+                </button>
+                <button
+                  className="danger"
+                  onClick={async () => {
+                    close();
+                    if (!(await confirmBox(`「${e.name}」을(를) 지울까요?`, { danger: true, ok: '지우기', detail: '이 항목과 이어진 관계도 함께 지워져요.' }))) return;
+                    await remove([e.id, ...rels.map((r) => r.id)]);
+                    go(`worlds/${worldId}/entries`);
+                  }}
+                >
+                  지우기
+                </button>
+              </>
+            )}
+          </Menu>
         )}
       </div>
       <div className="panel stack">
@@ -477,7 +486,7 @@ function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry:
           </div>
         ))}
         {!ro && (
-          <div>
+          <div className="reveal">
             <button
               className="small"
               onClick={async () => {

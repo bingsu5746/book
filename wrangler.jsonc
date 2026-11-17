@@ -13,6 +13,8 @@
     "run_worker_first": ["/api/*"]
   },
   "observability": { "enabled": true },
+  // 줄거리 요약 (worker/ai.ts): Workers AI
+  "ai": { "binding": "AI" },
   "durable_objects": {
     "bindings": [{ "name": "LIBRARY", "class_name": "Library" }]
   },

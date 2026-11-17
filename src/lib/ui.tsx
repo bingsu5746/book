@@ -206,7 +206,7 @@ export function SubNav<T extends string>({ items, value, onChange }: { items: { 
 }
 
 /** 바깥을 누르면 닫히는 작은 메뉴 */
-export function Menu({ label, children, icon = 'more', text }: { label: string; children: (close: () => void) => ReactNode; icon?: string; text?: string }) {
+export function Menu({ label, children, icon = 'more', text, btnClass = '' }: { label: string; children: (close: () => void) => ReactNode; icon?: string; text?: string; btnClass?: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -223,14 +223,14 @@ export function Menu({ label, children, icon = 'more', text }: { label: string; 
   return (
     <div className="menu-wrap" ref={ref}>
       {text ? (
-        <button className="menu-text" aria-label={`${label}: ${text}`} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <button className={`menu-text ${btnClass}`} aria-label={`${label}: ${text}`} aria-expanded={open} onClick={() => setOpen(!open)}>
           {text}
           <span className="chev" aria-hidden="true">
             ▾
           </span>
         </button>
       ) : (
-        <button className="icon-btn" aria-label={label} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <button className={`icon-btn ${btnClass}`} aria-label={label} aria-expanded={open} onClick={() => setOpen(!open)}>
           <Icon name={icon} />
         </button>
       )}

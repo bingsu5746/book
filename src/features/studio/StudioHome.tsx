@@ -99,6 +99,7 @@ export function StudioHome() {
   const { user } = useSession();
   const [newOpen, setNewOpen] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [showStats, setShowStats] = useState(false);
   const { data, loading, error, reload } = useAsync(async () => {
     const [b, s] = await Promise.all([api<{ books: Book[] }>('books'), api<{ days: { day: string; chars: number }[]; write?: { day: string; secs: number }[] }>('stats').catch(() => ({ days: [], write: [] }))]);
     const since = new Date(Date.now() - 6 * 86_400_000).toLocaleDateString('sv-SE');
@@ -126,47 +127,53 @@ export function StudioHome() {
       <div className="page-head">
         <div>
           <h1>집필실</h1>
-          <p className="sub">책을 쓰고 고치는 곳. 원고는 쓰는 대로 저장되고, 기기를 바꿔도 이어서 써요.</p>
+          <button className="stat-line" onClick={() => setShowStats(!showStats)} aria-expanded={showStats}>
+            오늘 {fmtNum(days.get(today()) ?? 0)}자 · {fmtMinutes(data!.writeToday)}
+            {streakOf(days, 0) > 0 && <> · {streakOf(days, 0)}일째</>}
+            <span className="chev">{showStats ? '▴' : '▾'}</span>
+          </button>
         </div>
         <div className="actions">
-          <button className="primary" onClick={() => setNewOpen(true)}>
-            <Icon name="plus" size={16} />새 책
-          </button>
-          <Menu label="더 보기">
+          <Menu label="더하기" icon="plus" btnClass="round-add">
             {(close) => (
-              <button onClick={() => (close(), setImporting(true))}>
-                <Icon name="upload" size={16} />
-                원고 파일 들이기
-              </button>
+              <>
+                <button onClick={() => (close(), setNewOpen(true))}>
+                  <Icon name="plus" size={16} />새 책
+                </button>
+                <button onClick={() => (close(), setImporting(true))}>
+                  <Icon name="upload" size={16} />
+                  원고 파일 들이기
+                </button>
+                <button onClick={() => (close(), go('jots'))}>
+                  <Icon name="note" size={16} />
+                  아이디어 수첩
+                </button>
+              </>
             )}
           </Menu>
         </div>
       </div>
-      <div className="stat-grid" style={{ marginBottom: 20 }}>
-        <div className="stat">
-          <div className="v">{fmtNum(days.get(today()) ?? 0)}</div>
-          <div className="k">오늘 쓴 글자</div>
+      {showStats && (
+        <div className="stack fade-in" style={{ marginBottom: 28 }}>
+          <div className="stat-grid">
+            <div className="stat">
+              <div className="v">{fmtNum(week)}</div>
+              <div className="k">최근 7일 쓴 글자</div>
+            </div>
+            <div className="stat">
+              <div className="v">{fmtMinutes(data!.writeWeek)}</div>
+              <div className="k">최근 7일 쓴 시간</div>
+            </div>
+            <div className="stat">
+              <div className="v">{fmtNum(books.reduce((s, b) => s + (b.total_chars ?? 0), 0))}</div>
+              <div className="k">모든 원고 글자</div>
+            </div>
+          </div>
+          <section className="panel">
+            <Heatmap days={days} />
+          </section>
         </div>
-        <div className="stat">
-          <div className="v">{fmtNum(week)}</div>
-          <div className="k">최근 7일</div>
-        </div>
-        <div className="stat">
-          <div className="v">{fmtMinutes(data!.writeToday)}</div>
-          <div className="k">오늘 쓴 시간 · 7일 {fmtMinutes(data!.writeWeek)}</div>
-        </div>
-        <div className="stat">
-          <div className="v">{streakOf(days, 0)}일</div>
-          <div className="k">연속으로 쓴 날</div>
-        </div>
-        <div className="stat">
-          <div className="v">{fmtNum(books.reduce((s, b) => s + (b.total_chars ?? 0), 0))}</div>
-          <div className="k">모든 원고 글자</div>
-        </div>
-      </div>
-      <section className="panel" style={{ marginBottom: 32 }}>
-        <Heatmap days={days} />
-      </section>
+      )}
       <section className="section">
         <div className="section-head">
           <h2>내 원고</h2>

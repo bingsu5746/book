@@ -86,7 +86,6 @@ export function Hall() {
       <div className="page-head">
         <div>
           <h1>열람실</h1>
-          <p className="sub">친구와 서로 쓴 책을 읽고, 문장마다 주석을 달고, 평가를 남겨요.</p>
         </div>
       </div>
       <div className="with-sub">

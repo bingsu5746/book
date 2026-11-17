@@ -5,7 +5,7 @@ import { go } from '../lib/router';
 import { cachedBooks, flatten } from '../lib/store';
 import type { Book } from '../lib/types';
 import { kindLabel, loadWorld, type World } from '../lib/world';
-import { Icon } from '../lib/ui';
+import { Icon, toast } from '../lib/ui';
 
 interface Item {
   label: string;
@@ -18,12 +18,10 @@ let cache: { at: number; items: Item[] } | null = null;
 async function collect(): Promise<Item[]> {
   if (cache && Date.now() - cache.at < 60_000) return cache.items;
   const items: Item[] = [
-    { label: '서재', sub: '메뉴', href: 'library', icon: 'library' },
-    { label: '집필실', sub: '메뉴', href: 'studio', icon: 'pen' },
-    { label: '세계관', sub: '메뉴', href: 'worlds', icon: 'globe' },
-    { label: '열람실', sub: '메뉴', href: 'hall', icon: 'people' },
-    { label: '밑줄 모음', sub: '메뉴', href: 'lines', icon: 'bookmark' },
-    { label: '본문 찾기', sub: '메뉴', href: 'search', icon: 'search' },
+    { label: '아이디어 수첩', sub: 'Ctrl/⌘ + J 로 바로 적기', href: 'jots', icon: 'note' },
+    { label: '밑줄 모음', sub: '읽다가 그은 밑줄', href: 'lines', icon: 'bookmark' },
+    { label: '자유 이용 책 찾기', sub: '위키문헌 · 구텐베르크', href: 'discover', icon: 'compass' },
+    { label: '계정 · 설정', sub: '화면 밝기 · 백업', href: 'account', icon: 'user' },
   ];
   const [b, w] = await Promise.all([api<{ books: Book[] }>('books').catch(() => ({ books: [] as Book[] })), api<{ worlds: World[] }>('worlds').catch(() => ({ worlds: [] as World[] }))]);
   for (const x of b.books.filter((x) => !x.deleted)) items.push({ label: x.title, sub: x.kind === 'write' ? '내 원고 · 집필실' : '들인 책 · 읽기', href: x.kind === 'write' ? `write/${x.id}` : `read/${x.id}`, icon: x.kind === 'write' ? 'pen' : 'book' });
@@ -72,6 +70,10 @@ export function QuickJump() {
   const list = useMemo(() => {
     const t = q.trim().toLowerCase();
     if (!t) return items.slice(0, 12);
+    const actions: Item[] = [
+      { label: `모든 책 본문에서 「${q.trim()}」 찾기`, sub: '내 원고 · 들인 책 · 친구의 책', href: `search?q=${encodeURIComponent(q.trim())}`, icon: 'search' },
+      { label: `수첩에 적기: ${q.trim()}`, sub: 'Enter 로 바로 적어요', href: `@jot:${q.trim()}`, icon: 'note' },
+    ];
     const score = (x: Item) => {
       const l = x.label.toLowerCase();
       if (l === t) return 0;
@@ -84,12 +86,19 @@ export function QuickJump() {
       .map((x) => ({ x, s: score(x) }))
       .filter((y) => y.s < 9)
       .sort((a, b) => a.s - b.s)
-      .slice(0, 30)
-      .map((y) => y.x);
+      .slice(0, 28)
+      .map((y) => y.x)
+      .concat(actions);
   }, [q, items]);
   if (!open) return null;
   const pick = (x: Item) => {
     setOpen(false);
+    if (x.href.startsWith('@jot:')) {
+      void api('jots', { body: { text: x.href.slice(5) } })
+        .then(() => toast('수첩에 적었어요'))
+        .catch((e) => toast((e as Error).message, 'err'));
+      return;
+    }
     go(x.href);
   };
   return (
@@ -101,7 +110,7 @@ export function QuickJump() {
             ref={input}
             className="grow"
             style={{ border: 0, background: 'none', font: 'inherit', fontSize: 16, color: 'var(--text)', outline: 'none' }}
-            placeholder="책 · 장 · 세계관 항목 이름"
+            placeholder="책 · 장 · 인물 이름, 또는 찾을 말"
             value={q}
             onChange={(e) => {
               setQ(e.target.value);

@@ -2820,3 +2820,113 @@ kbd {
 .entry-editor .cm-editor {
   font-size: 15.5px;
 }
+
+.find-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+  color: var(--faint);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.find-btn kbd {
+  margin-left: auto;
+  font-size: 11px;
+  border-bottom-width: 1px;
+  color: var(--faint);
+}
+/* 눌러야(또는 올려야) 보이는 단추 */
+@media (hover: hover) {
+  .reveal-wrap .reveal,
+  .section-head .reveal,
+  .panel .reveal {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .reveal-wrap:hover .reveal,
+  .reveal-wrap:focus-within .reveal,
+  .section-head:hover .reveal,
+  .panel:hover .reveal,
+  .reveal:focus-visible,
+  .reveal[aria-expanded='true'] {
+    opacity: 1;
+  }
+}
+.round-add {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  padding: 0;
+  justify-content: center;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.round-add .icon {
+  margin: auto;
+}
+
+.stat-line {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  gap: 6px;
+}
+.stat-line .chev {
+  font-size: 10px;
+  color: var(--faint);
+}
+.icon-btn.round-add {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.icon-btn.round-add:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+  filter: brightness(1.08);
+}
+.ws-top .book-name {
+  font: 600 15px var(--serif);
+  max-width: min(52vw, 520px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.save-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  margin: 0 6px;
+  flex: none;
+}
+.save-dot.busy {
+  background: #d9a441;
+}
+.save-dot.err {
+  background: var(--bad);
+}
+/* 원고 아래 글자 수 줄은 마우스를 올렸을 때만 또렷하게 */
+@media (hover: hover) {
+  .ed-foot {
+    opacity: 0.35;
+    transition: opacity 0.2s;
+  }
+  .ed-foot:hover {
+    opacity: 1;
+  }
+  .ws-top .icon-btn {
+    opacity: 0.6;
+  }
+  .ws-top:hover .icon-btn {
+    opacity: 1;
+  }
+}

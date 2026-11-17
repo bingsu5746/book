@@ -25,11 +25,10 @@ export function WorldsHome() {
       <div className="page-head">
         <div>
           <h1>세계관</h1>
-          <p className="sub">인물 · 장소 · 세력 · 규칙과 그 사이의 관계, 연표를 짓는 곳. 책에 연결하면 원고와 서로 이어져요.</p>
         </div>
         <div className="actions">
-          <button className="primary" onClick={create}>
-            <Icon name="plus" size={16} />새 세계
+          <button className="icon-btn round-add" aria-label="새 세계" title="새 세계" onClick={create}>
+            <Icon name="plus" />
           </button>
         </div>
       </div>

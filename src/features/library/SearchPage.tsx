@@ -52,7 +52,6 @@ export function SearchPage({ q: initial }: { q: string }) {
       <div className="page-head">
         <div>
           <h1>찾기</h1>
-          <p className="sub">모든 책의 제목과 본문에서 찾아요. 들인 책, 내 원고, 친구가 공유한 책까지.</p>
         </div>
       </div>
       <form

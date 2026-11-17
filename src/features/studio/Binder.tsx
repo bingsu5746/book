@@ -23,6 +23,7 @@ export function Binder({ nodes, sel, onSelect, act }: { nodes: BookNode[]; sel: 
   const [drop, setDrop] = useState<{ id: string; where: 'before' | 'after' | 'in' } | null>(null);
   const [showTrash, setShowTrash] = useState(false);
   const [filter, setFilter] = useState('');
+  const [showFilter, setShowFilter] = useState(false);
   const matches = (n: BookNode) => {
     const f = filter.trim();
     if (!f) return true;
@@ -86,6 +87,9 @@ export function Binder({ nodes, sel, onSelect, act }: { nodes: BookNode[]; sel: 
         <span className="tiny muted grow" style={{ letterSpacing: '.1em' }}>
           원고
         </span>
+        <button className="icon-btn" aria-label="원고 목록 거르기" onClick={() => setShowFilter(!showFilter)}>
+          <Icon name="search" size={15} />
+        </button>
         <Menu label="새로 만들기" icon="plus">
           {(close) => (
             <>
@@ -106,7 +110,9 @@ export function Binder({ nodes, sel, onSelect, act }: { nodes: BookNode[]; sel: 
           )}
         </Menu>
       </div>
-      <input className="input" style={{ fontSize: 13, padding: '6px 9px', marginBottom: 6 }} placeholder="거르기: 제목 · 시점 · 상태 · #꼬리표" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="원고 목록 거르기" />
+      {(showFilter || filter) && (
+        <input className="input" autoFocus style={{ fontSize: 13, padding: '6px 9px', marginBottom: 6 }} placeholder="거르기: 제목 · 시점 · 상태 · #꼬리표" value={filter} onChange={(e) => setFilter(e.target.value)} onBlur={() => !filter && setShowFilter(false)} onKeyDown={(e) => e.key === 'Escape' && (setFilter(''), setShowFilter(false))} aria-label="원고 목록 거르기" />
+      )}
       {flat.map((n) => {
         if (filter ? !matches(n) && n.kind !== 'part' : isHidden(n)) return null;
         const k = hasKids(n.id);
