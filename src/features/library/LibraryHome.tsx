@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../lib/api';
-import { charsLabel, Cover, coverUrl } from '../../lib/BookCard';
+import { charsLabel, coverUrl } from '../../lib/BookCard';
 import { Desk, Manuscript, Shelf, Spine } from './Bookcase';
 import type { CoverStyle } from '../../lib/cover';
 import { useSession } from '../../lib/session';
@@ -125,14 +125,6 @@ export function LibraryHome() {
   );
   const trash = books.filter((b) => b.deleted);
   const prog = (key: string) => progress[key];
-  // 이어 읽기: 가장 최근에 읽은 것
-  const recent = [
-    ...live.map((b) => ({ key: `b:${b.id}`, title: b.title, author: b.author, color: b.color, seed: b.id, href: `#/read/${b.id}`, style: b.meta?.coverStyle as CoverStyle | undefined, image: coverUrl(b.id, b.meta) })),
-    ...shared.map((s) => ({ key: `e:${s.id}`, title: s.title, author: s.owner_name, color: s.color, seed: s.id, href: `#/edition/${s.edition_id}`, style: undefined as CoverStyle | undefined, image: coverUrl(s.id, { coverImage: s.cover_image, coverMode: s.cover_mode }) })),
-  ]
-    .filter((x) => prog(x.key) && (prog(x.key).f ?? 0) < 0.999)
-    .sort((a, b) => prog(b.key).at - prog(a.key).at);
-  const cont = recent[0];
   const hasSeed = books.some((b) => b.meta?.template === 'seed-dawn');
 
   /** 책 카드를 누르면 바로 펼치지 않고 「꺼내 보기」 */
@@ -229,30 +221,6 @@ export function LibraryHome() {
       </div>
 
       {offline && <p className="note-box" style={{ marginBottom: 20 }}>인터넷에 연결되어 있지 않아 이 기기에 받아 둔 책만 보여요. 쓴 글은 기기에 저장했다가 연결되면 보내요.</p>}
-      {cont && (
-        <a className="hero" href={cont.href} style={{ textDecoration: 'none', color: 'inherit' }}>
-          <Cover title={cont.title} color={cont.color} seed={cont.seed} author={cont.author} style={cont.style} image={cont.image} />
-          <div className="grow">
-            <p className="tiny muted" style={{ letterSpacing: '.1em' }}>
-              이어 읽기
-            </p>
-            <h2 className="serif" style={{ fontSize: 22, margin: '4px 0' }}>
-              {cont.title}
-            </h2>
-            <p className="muted small">
-              {cont.author} · {Math.round((prog(cont.key).f ?? 0) * 100)}% · {ago(prog(cont.key).at)}
-            </p>
-            <div className="meter" style={{ maxWidth: 320 }}>
-              <i style={{ width: `${(prog(cont.key).f ?? 0) * 100}%` }} />
-            </div>
-          </div>
-          <span className="btn primary">
-            <Icon name="book" size={16} />
-            펼치기
-          </span>
-        </a>
-      )}
-
       <div className="bookcase">
         <Shelf
           title="다 쓴 책"
