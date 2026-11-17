@@ -1,0 +1,139 @@
+import { useEffect, useState } from 'react';
+import { api, setUnauthorizedHandler } from './lib/api';
+import { go, useRoute } from './lib/router';
+import { SessionCtx } from './lib/session';
+import { onSaveState } from './lib/store';
+import type { User } from './lib/types';
+import { Icon, Spinner, Toaster } from './lib/ui';
+import { local } from './lib/idb';
+import { AuthScreen } from './features/auth/AuthScreen';
+import { LibraryHome } from './features/library/LibraryHome';
+import { BookReader } from './features/library/BookReader';
+import { SearchPage } from './features/library/SearchPage';
+import { Discover } from './features/library/Discover';
+import { StudioHome } from './features/studio/StudioHome';
+import { Workspace } from './features/studio/Workspace';
+import { WorldsHome } from './features/world/WorldsHome';
+import { WorldView } from './features/world/WorldView';
+import { Hall } from './features/community/Hall';
+import { EditionReader } from './features/community/EditionReader';
+import { Account } from './features/account/Account';
+
+const NAV = [
+  { id: 'library', label: '서재', icon: 'library' },
+  { id: 'studio', label: '집필실', icon: 'pen' },
+  { id: 'worlds', label: '세계관', icon: 'globe' },
+  { id: 'hall', label: '열람실', icon: 'people' },
+  { id: 'search', label: '찾기', icon: 'search' },
+];
+
+function SaveBadge() {
+  const [s, setS] = useState({ pending: 0, error: null as string | null });
+  useEffect(() => onSaveState(setS), []);
+  if (s.error) return <div className="save-state err">저장 대기 중 · {s.error}</div>;
+  if (s.pending) return <div className="save-state">저장하는 중…</div>;
+  return null;
+}
+
+export function App() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  const [invite, setInvite] = useState(true);
+  const { parts, query } = useRoute();
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => setUser(null));
+    api<{ user: User | null; invite: boolean }>('auth/status')
+      .then((r) => {
+        setUser(r.user);
+        setInvite(r.invite);
+        if (r.user) local.set('lastUser', r.user);
+      })
+      .catch(() => {
+        // 인터넷이 없으면 지난번 로그인한 사람으로 (기기에 받아 둔 책을 읽을 수 있게)
+        setUser(local.get<User | null>('lastUser', null));
+      });
+  }, []);
+
+  if (user === undefined)
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
+        <Spinner />
+      </div>
+    );
+  if (!user)
+    return (
+      <>
+        <AuthScreen
+          inviteOpen={invite}
+          onDone={(u) => {
+            local.set('lastUser', u);
+            setUser(u);
+          }}
+        />
+        <Toaster />
+      </>
+    );
+
+  const [top = 'library', a, b] = parts;
+  let full: React.ReactNode = null;
+  if (top === 'read' && a) full = <BookReader bookId={a} nodeId={b} at={query.get('at')} />;
+  if (top === 'write' && a) full = <Workspace bookId={a} nodeId={b} />;
+  if (top === 'edition' && a) full = <EditionReader editionId={a} nodeId={b} noteId={query.get('note')} />;
+
+  let page: React.ReactNode;
+  if (top === 'studio') page = <StudioHome />;
+  else if (top === 'worlds' && a) page = <WorldView worldId={a} tab={b} entryId={parts[3]} />;
+  else if (top === 'worlds') page = <WorldsHome />;
+  else if (top === 'hall') page = <Hall />;
+  else if (top === 'search') page = <SearchPage q={query.get('q') ?? ''} />;
+  else if (top === 'discover') page = <Discover />;
+  else if (top === 'account') page = <Account />;
+  else page = <LibraryHome />;
+  const navOn = top === 'discover' ? 'library' : top;
+
+  return (
+    <SessionCtx.Provider value={{ user, setUser }}>
+      {full ?? (
+        <div className="app">
+          <aside className="sidebar">
+            <a className="brand" href="#/library">
+              <img src="/icon.svg" alt="" />
+              서재
+            </a>
+            {NAV.map((n) => (
+              <a key={n.id} className={`nav-item${navOn === n.id ? ' on' : ''}`} href={`#/${n.id}`}>
+                <Icon name={n.icon} />
+                {n.label}
+              </a>
+            ))}
+            <div className="bottom">
+              <SaveBadge />
+              <a className={`nav-item${top === 'account' ? ' on' : ''}`} href="#/account">
+                <Icon name="user" />
+                {user.nickname}
+              </a>
+            </div>
+          </aside>
+          <main className="main">
+            {page}
+            <div className="tabbar-spacer" />
+          </main>
+          <nav className="tabbar" aria-label="메뉴">
+            {NAV.slice(0, 4).map((n) => (
+              <a key={n.id} className={navOn === n.id ? 'on' : ''} href={`#/${n.id}`}>
+                <Icon name={n.icon} size={20} />
+                {n.label}
+              </a>
+            ))}
+            <a className={top === 'account' || top === 'search' ? 'on' : ''} href="#/account">
+              <Icon name="user" size={20} />
+              계정
+            </a>
+          </nav>
+        </div>
+      )}
+      <Toaster />
+    </SessionCtx.Provider>
+  );
+}
+export const openSearch = () => go('search');
