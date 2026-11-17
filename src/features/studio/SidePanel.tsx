@@ -11,6 +11,8 @@ import { entriesOf, fieldsFor, kindLabel, mentionedIn, type Entry, type WEvent, 
 import type { EditorHandle } from './Editor';
 import { infoGaps } from '../../lib/fillinfo';
 import { AiTools } from './AiTools';
+import { Alts } from './Alts';
+import { Traces } from './Traces';
 
 export type SideTab = 'info' | 'world' | 'spell' | 'history' | 'revise' | 'ai' | 'notes';
 const LABELS = ['', '#c26b4a', '#d9a441', '#3f8a6c', '#4f6fa8', '#8a5ca8', '#77736b'];
@@ -56,7 +58,7 @@ export function SidePanel({
             ['info', '장 정보'],
             ['world', '세계관'],
             ['spell', '맞춤법'],
-            ['history', '기록'],
+            ['history', '기록 · 안'],
             ['revise', '퇴고'],
             ['ai', 'AI 도움'],
             ['notes', '친구 주석'],
@@ -72,7 +74,13 @@ export function SidePanel({
         {node && tab === 'info' && <Info node={node} items={items} onPatch={onPatch} summarize={summarize} fillInfo={fillInfo} />}
         {node && tab === 'world' && <WorldTab worldId={worldId} items={items} body={body} editor={editor} onOpenWorld={onOpenWorld} nodeId={node.id} />}
         {node && tab === 'spell' && <SpellPanel key={node.id} bookId={bookId} body={body} editor={editor} />}
-        {node && tab === 'history' && <History node={node} body={body} onRestore={onRestore} />}
+        {node && tab === 'history' && (
+          <>
+            <Alts node={node} body={body} onPatch={onPatch} onRestore={onRestore} flush={prepareAi} />
+            <hr className="side-hr" />
+            <History node={node} body={body} onRestore={onRestore} />
+          </>
+        )}
         {node && tab === 'revise' && <Revise body={body} editor={editor} />}
         {node && tab === 'ai' && <AiTools node={node} body={body} items={items} worldId={worldId} editor={editor} prepare={prepareAi} onAddEntries={onAddEntries} />}
         {node && tab === 'notes' && <FriendNotes bookId={bookId} node={node} body={body} editor={editor} />}
@@ -331,7 +339,7 @@ function History({ node, body, onRestore }: { node: BookNode; body: string; onRe
   const [view, setView] = useState<{ snap: Snap; body: string } | null>(null);
   const load = () =>
     api<{ snapshots: Snap[] }>(`nodes/${node.id}/snapshots`)
-      .then((r) => setSnaps(r.snapshots))
+      .then((r) => setSnaps(r.snapshots.filter((s) => s.auto !== 2)))
       .catch(() => setSnaps([]));
   useEffect(() => {
     setSnaps(null);
@@ -422,6 +430,15 @@ function History({ node, body, onRestore }: { node: BookNode; body: string; onRe
 }
 
 function Revise({ body, editor }: { body: string; editor: React.RefObject<EditorHandle | null> }) {
+  return (
+    <>
+      <Traces body={body} editor={editor} />
+      <hr className="side-hr" />
+      <ReviseStats body={body} editor={editor} />
+    </>
+  );
+}
+function ReviseStats({ body, editor }: { body: string; editor: React.RefObject<EditorHandle | null> }) {
   const [longAt, setLongAt] = useState(80);
   const [show, setShow] = useState<'' | 'repeat' | 'long'>('');
   const a = useMemo(() => analyze(body, { longAt }), [body, longAt]);

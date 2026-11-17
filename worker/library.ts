@@ -381,6 +381,7 @@ export class Library extends DurableObject<Env> {
     if ((r = m(/^snapshots\/([a-z0-9]+)$/))) {
       if (method === 'GET') return this.getSnapshot(user, r[1]);
       if (method === 'DELETE') return this.deleteSnapshot(user, r[1]);
+      if (method === 'PATCH') return this.renameSnapshot(user, r[1], b);
     }
     if (path === 'search' && method === 'GET') return this.search(user, q);
 
@@ -820,7 +821,25 @@ export class Library extends DurableObject<Env> {
   }
   private takeSnapshot(user: UserRow, nodeId: string, b: Body) {
     const n = this.ownNode(user, nodeId);
+    if (b.alt === true) {
+      // 다른 안(B안): auto = 2. 지금 원고를 그 안으로 남긴다 (같은 이름의 안이 있으면 덮어씀)
+      const label = str(b.label, 40).trim() || '다른 안';
+      if (Number(this.one('SELECT COUNT(*) AS n FROM snapshots WHERE node_id = ? AND auto = 2', nodeId)?.n ?? 0) >= 20) return fail('한 장에 안은 20개까지 둘 수 있어요.');
+      const same = this.one('SELECT id FROM snapshots WHERE node_id = ? AND auto = 2 AND label = ?', nodeId, label);
+      if (same) this.sql.exec('UPDATE snapshots SET body = ?, title = ?, chars = ?, at = ? WHERE id = ?', n.body, n.title, charsNoSpace(n.body), Date.now(), same.id);
+      else this.sql.exec('INSERT INTO snapshots (id, node_id, book_id, body, title, label, auto, chars, at) VALUES (?, ?, ?, ?, ?, ?, 2, ?, ?)', newId(), n.id, n.book_id, n.body, n.title, label, charsNoSpace(n.body), Date.now());
+      return json({ ok: true });
+    }
     this.snapshot(n, str(b.label, 100) || '직접 남긴 기록', false);
+    return json({ ok: true });
+  }
+  /** 안 이름 바꾸기 (안만) */
+  private renameSnapshot(user: UserRow, id: string, b: Body) {
+    const s = this.ownSnapshot(user, id);
+    if (Number(s.auto) !== 2) return fail('안만 이름을 바꿀 수 있어요.');
+    const label = str(b.label, 40).trim();
+    if (!label) return fail('이름을 적어 주세요.');
+    this.sql.exec('UPDATE snapshots SET label = ? WHERE id = ?', label, id);
     return json({ ok: true });
   }
   private ownSnapshot(user: UserRow, id: string) {

@@ -13,6 +13,7 @@ import { entriesOf, loadWorld, newItemId, saveItems, toRefs, type Entry, type WI
 import { Binder, type BinderActions } from './Binder';
 import { Editor, type EditorHandle } from './Editor';
 import { TidyBreaks } from './TidyBreaks';
+import { NameCheck } from './NameCheck';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
 import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
@@ -89,6 +90,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const [mobile, setMobile] = useState<'' | 'binder' | 'side'>('');
   const [items, setItems] = useState<WItem[]>([]);
   const [tidy, setTidy] = useState(false);
+  const [nameCheck, setNameCheck] = useState(false);
   const [save, setSave] = useState({ pending: 0, error: null as string | null });
   const [selChars, setSelChars] = useState(0);
   const [sprint, setSprint] = useState<{ end: number; start: number; startChars: number } | null>(null);
@@ -288,20 +290,20 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
       updateNode(id, { rev: r.rev, updated: Date.now() });
     }
   };
-  /** 줄바꿈 정리: 장마다 바꾸기 전 글을 기록에 남기고 바꾼다 */
-  const applyTidy = async (changes: { id: string; body: string }[]) => {
+  /** 여러 장을 한꺼번에 바꾼다: 장마다 바꾸기 전 글을 기록에 남기고 바꾼다 */
+  const applyChanges = async (changes: { id: string; body: string }[], label: string) => {
     try {
       for (const c of changes) {
         await flush(c.id);
-        await api(`nodes/${c.id}/snapshots`, { body: { label: '줄바꿈 정리 전' } });
+        await api(`nodes/${c.id}/snapshots`, { body: { label } });
       }
     } catch (e) {
-      toast(`기록을 남기지 못해 정리하지 않았어요. ${(e as Error).message}`, 'err');
+      toast(`기록을 남기지 못해 바꾸지 않았어요. ${(e as Error).message}`, 'err');
       throw e;
     }
     for (const c of changes) onBody(c.id, c.body);
     setEdKey((k) => k + 1);
-    toast(`${changes.length}개 장의 줄바꿈을 정리했어요. 전 글은 「기록」에 있어요.`);
+    toast(`${changes.length}개 장을 바꿨어요. 전 글은 「기록」에 「${label}」으로 있어요.`);
   };
 
   /** AI 줄거리 요약: 서버가 원고를 읽어 요약을 돌려주면 장 정보에 저장한다 */
@@ -515,6 +517,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   {speakSupported() && <button onClick={() => (close(), toggleSpeak())}>{speaking ? '듣기 멈추기' : '소리 내어 듣기 (커서부터)'}</button>}
                   <button onClick={() => (close(), openSpell())}>맞춤법 검사 (F7)</button>
                   <button onClick={() => (close(), setTidy(true))}>줄바꿈 정리 (엔터 줄이기)</button>
+                  <button onClick={() => (close(), setNameCheck(true))}>이름 표기 검사 (홍설 / 홍셜)</button>
                   <button onClick={() => (close(), setJotPick(true))}>수첩에서 꺼내 넣기</button>
                   <hr />
                 </>
@@ -582,7 +585,29 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         </Menu>
       </header>
 
-      {tidy && <TidyBreaks node={sel && sel.kind !== 'part' ? sel : null} nodes={ordered} onClose={() => setTidy(false)} onApply={applyTidy} />}
+      {tidy && <TidyBreaks node={sel && sel.kind !== 'part' ? sel : null} nodes={ordered} onClose={() => setTidy(false)} onApply={(c) => applyChanges(c, '줄바꿈 정리 전')} />}
+      {nameCheck && (
+        <NameCheck
+          bookId={bookId}
+          nodes={ordered}
+          items={items}
+          hasWorld={!!book.world_id}
+          onClose={() => setNameCheck(false)}
+          onApply={applyChanges}
+          onAlias={async (e, alias) => {
+            if (!book.world_id) return;
+            const ne = { ...e, aliases: [...e.aliases, alias] };
+            await saveItems(book.world_id, [ne]);
+            setItems((x) => x.map((i) => (i.id === e.id ? ne : i)));
+            toast(`「${alias}」을 「${e.name}」의 다른 이름으로 등록했어요.`);
+          }}
+          onOpen={(id, f) => {
+            setNameCheck(false);
+            select(id);
+            setTimeout(() => editor.current?.find(f), 250);
+          }}
+        />
+      )}
       {jotPick && (
         <JotPicker
           onClose={() => setJotPick(false)}

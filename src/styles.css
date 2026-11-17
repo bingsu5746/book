@@ -3439,3 +3439,17 @@ details.more > label.field {
     grid-template-columns: 1fr;
   }
 }
+.side-hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 4px 0;
+  width: 100%;
+}
+.alt-col {
+  max-height: 60vh;
+}
+.ai-card mark {
+  background: color-mix(in srgb, #d9a441 28%, transparent);
+  color: inherit;
+  border-radius: 2px;
+}
