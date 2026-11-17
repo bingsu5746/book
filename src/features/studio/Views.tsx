@@ -14,6 +14,7 @@ import { EditionDiff } from './EditionDiff';
 import { AnalysisPanel } from './AnalysisPanel';
 import { GoalPicker } from './GoalPicker';
 import { distributeGoal, goalLeaves, perPage } from '../../lib/goals';
+import { analyze } from '../../lib/analyze';
 
 const STATUS_COLOR: Record<string, string> = { '': 'var(--line-strong)', idea: '#b9b2a3', draft: '#d9a441', revise: '#c26b4a', done: '#3f8a6c' };
 
@@ -274,6 +275,7 @@ export function BookStats({ book, nodes, onPatchBook, onPatchNode }: { book: Boo
         <Heatmap days={days} />
         <p className="faint tiny">원고에 글자가 늘어난 만큼 세요. 지운 글자는 빼지 않아요.</p>
       </section>
+      <ChapterFlow nodes={flat} />
       <section className="panel stack">
         <h3 className="serif">장별 분량</h3>
         <div className="bars" style={{ height: 120 }}>
@@ -495,6 +497,7 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
           </div>
         )}
       </section>
+      {book.kind === 'write' && <LinkShare bookId={book.id} />}
       {!!readers.data?.readers.length && (
         <section className="panel stack">
           <h3 className="serif">친구가 읽은 자리</h3>
@@ -538,5 +541,203 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
         </div>
       </section>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- 로그인 없는 읽기 링크
+interface Link {
+  token: string;
+  created: number;
+  expires: number | null;
+  revoked: number | null;
+}
+function LinkShare({ bookId }: { bookId: string }) {
+  const { data, reload } = useAsync(() => api<{ links: Link[]; edition: { number: number; created: number } | null }>(`books/${bookId}/links`), [bookId]);
+  const [days, setDays] = useState(30);
+  const [busy, setBusy] = useState(false);
+  const url = (t: string) => `${location.origin}/#/p/${t}`;
+  const copy = async (t: string) => {
+    try {
+      await navigator.clipboard.writeText(url(t));
+      toast('링크를 복사했어요');
+    } catch {
+      await promptBox('이 링크를 복사해 보내세요', url(t));
+    }
+  };
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setBusy(false);
+      reload();
+    }
+  };
+  const live = (data?.links ?? []).filter((l) => !l.revoked && (!l.expires || l.expires > Date.now()));
+  return (
+    <section className="panel stack">
+      <h3 className="serif">링크로 보여 주기 (가입 없이)</h3>
+      <p className="muted small">
+        가입하지 않은 사람도 링크만 있으면 이 책을 읽을 수 있어요(읽기만, 주석 · 평가는 못 남겨요). 이 책의 가장 최근 판을 보여 주고, 열람실에 공유하지 않아도 돼요. 링크마다 기한을 정하고 언제든 닫을 수 있어요.
+      </p>
+      <p className="faint small">{data?.edition ? `지금 링크로 보이는 글: ${data.edition.number}판 (${fmtDate(data.edition.created)})` : '아직 판이 없어요. 링크를 만들면 지금 원고로 판을 찍어요.'}</p>
+      <div className="row wrap">
+        <select className="input" style={{ width: 'auto' }} value={days} onChange={(e) => setDays(+e.target.value)} aria-label="링크 기한">
+          <option value={7}>7일 동안</option>
+          <option value={30}>30일 동안</option>
+          <option value={90}>90일 동안</option>
+          <option value={0}>기한 없이</option>
+        </select>
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() =>
+            run(async () => {
+              const r = await api<{ token: string }>(`books/${bookId}/links`, { body: { days } });
+              await copy(r.token);
+            })
+          }
+        >
+          <Icon name="link" size={16} />
+          링크 만들기
+        </button>
+        {!!data?.edition && (
+          <button
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                if (!(await confirmBox('지금 원고로 새 판을 찍을까요?', { ok: '새 판 찍기', detail: '모든 링크가 새 판을 보여 줘요. 열람실 공유는 그대로예요.' }))) return;
+                const r = await api<{ edition: { number: number } }>(`books/${bookId}/links/edition`, { body: {} });
+                toast(`${r.edition.number}판을 찍었어요. 링크가 이 판을 보여 줘요.`);
+              })
+            }
+          >
+            지금 원고로 새 판 찍기
+          </button>
+        )}
+      </div>
+      {!!live.length && (
+        <div className="list">
+          {live.map((l) => (
+            <div key={l.token} className="list-item">
+              <span className="grow small" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                …/p/{l.token.slice(0, 8)}…
+                <span className="faint tiny"> · {fmtDate(l.created)} 만듦 · {l.expires ? `${fmtDate(l.expires)}까지` : '기한 없음'}</span>
+              </span>
+              <button className="small" onClick={() => copy(l.token)}>
+                복사
+              </button>
+              <button
+                className="small danger"
+                disabled={busy}
+                onClick={() =>
+                  run(async () => {
+                    if (!(await confirmBox('이 링크를 닫을까요?', { ok: '닫기', danger: true, detail: '이 링크로는 더 읽을 수 없어요.' }))) return;
+                    await api(`links/${l.token}`, { method: 'DELETE' });
+                  })
+                }
+              >
+                닫기
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------- 장별 흐름 (분량 · 대사 비율 · 문장 길이)
+function ChapterFlow({ nodes }: { nodes: BookNode[] }) {
+  const rows = useMemo(
+    () =>
+      nodes
+        .filter((n) => (n.body ?? '').trim())
+        .map((n, i) => {
+          const a = analyze(n.body ?? '');
+          return { id: n.id, i: i + 1, title: n.title || '제목 없음', chars: charsNoSpace(n.body ?? ''), dia: Math.round(a.dialogueShare * 100), sent: a.avgSentence };
+        }),
+    [nodes],
+  );
+  const [table, setTable] = useState(false);
+  if (rows.length < 2) return null;
+  const med = (v: number[]) => {
+    const s = [...v].sort((a, b) => a - b);
+    return s[Math.floor(s.length / 2)];
+  };
+  const series: { key: 'chars' | 'dia' | 'sent'; label: string; unit: string; hint: string }[] = [
+    { key: 'chars', label: '분량', unit: '자', hint: '긴 장 · 짧은 장' },
+    { key: 'dia', label: '대사 비율', unit: '%', hint: '높으면 대화가 많은 장면' },
+    { key: 'sent', label: '문장 평균 길이', unit: '자', hint: '짧으면 빠르게, 길면 느리게 읽혀요' },
+  ];
+  return (
+    <section className="panel stack">
+      <div className="row">
+        <h3 className="serif grow">장별 흐름</h3>
+        <button className="ghost small" onClick={() => setTable(!table)} aria-pressed={table}>
+          {table ? '그래프로' : '표로 보기'}
+        </button>
+      </div>
+      <p className="faint tiny">장마다 따로 세요(한국어 형태소 분석 없이 어림). 가운데 선은 장들의 가운뎃값이에요. 막대에 마우스를 올리면 장 이름과 값이 보여요.</p>
+      {table ? (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="flow-table">
+            <thead>
+              <tr>
+                <th>장</th>
+                <th>분량</th>
+                <th>대사 비율</th>
+                <th>문장 평균</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    {r.i}. {r.title}
+                  </td>
+                  <td className="num">{fmtNum(r.chars)}자</td>
+                  <td className="num">{r.dia}%</td>
+                  <td className="num">{r.sent}자</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        series.map((s) => {
+          const v = rows.map((r) => r[s.key]);
+          const max = Math.max(1, ...v);
+          const m = med(v);
+          return (
+            <div key={s.key} className="flow">
+              <div className="flow-label">
+                <b>{s.label}</b>
+                <span className="faint tiny">
+                  가운뎃값 {fmtNum(m)}
+                  {s.unit} · {s.hint}
+                </span>
+              </div>
+              <div className="flow-bars" role="img" aria-label={`장별 ${s.label}: ${rows.map((r) => `${r.i}장 ${r[s.key]}${s.unit}`).join(', ')}`}>
+                <i className="flow-med" style={{ bottom: `${(m / max) * 100}%` }} aria-hidden="true" />
+                {rows.map((r) => (
+                  <span key={r.id} className="flow-bar" title={`${r.i}. ${r.title} · ${fmtNum(r[s.key])}${s.unit}`}>
+                    <i style={{ height: `${Math.max(2, (r[s.key] / max) * 100)}%` }} />
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })
+      )}
+      {!table && (
+        <div className="flow-axis faint tiny" aria-hidden="true">
+          <span>1장</span>
+          <span>{rows.length}장</span>
+        </div>
+      )}
+    </section>
   );
 }

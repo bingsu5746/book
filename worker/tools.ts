@@ -3,8 +3,8 @@
 // 모델 답은 JSON 으로 받고, 원고에서 찾을 수 없는 인용은 쓰는 쪽에서 걸러 낸다.
 import { clip } from './ai';
 
-export type ToolName = 'conflicts' | 'names' | 'polish' | 'questions' | 'dialogue';
-export const TOOLS: ToolName[] = ['conflicts', 'names', 'polish', 'questions', 'dialogue'];
+export type ToolName = 'conflicts' | 'names' | 'polish' | 'questions' | 'dialogue' | 'clues';
+export const TOOLS: ToolName[] = ['conflicts', 'names', 'polish', 'questions', 'dialogue', 'clues'];
 
 /** 가짜 답(개발용)을 고르는 표시: 시스템 지시에 들어 있다 */
 export const MARK = {
@@ -14,6 +14,7 @@ export const MARK = {
   polish: '퇴고를 돕는 교정자',
   questions: '질문을 던지는 편집자',
   dialogue: '대사의 화자를 가리는 편집자',
+  clues: '복선을 찾는 편집자',
 } as const;
 
 const BASE = '원고와 주어진 자료에 실제로 쓰인 것만 근거로 한다. 없는 사실을 지어내지 않는다. 확실하지 않으면 뺀다.';
@@ -102,6 +103,33 @@ export function questionMessages(title: string, synopsis: string, previous: stri
       content: `앞 장 자료:\n${previous.trim() || '(없음)'}\n\n지금 장: ${title || '(제목 없음)'}\n${synopsis.trim() ? `작가가 적어 둔 줄거리: ${synopsis.trim()}\n` : ''}\n지금까지 쓴 원고 (뒤쪽이 막힌 곳):\n${t || '(아직 비어 있음)'}`,
     },
   ];
+}
+
+// ---------------------------------------------------------------- 복선
+export function clueMessages(title: string, body: string, known: string[], previous: string) {
+  return [
+    {
+      role: 'system',
+      content:
+        `너는 소설 원고에서 ${MARK.clues}다. ${BASE} 지금 장에서 (1) 뒤에서 다시 쓰일 것처럼 일부러 깔아 둔 물건 · 말 · 행동 · 수수께끼(복선)와, (2) 앞에서 깔린 복선을 거두는 대목을 찾는다. ` +
+        '「이미 표시한 복선」 목록에 있는 것을 거두면 그 이름을 그대로 쓴다. 분명하지 않은 것은 넣지 않는다. 많아야 각각 6개. ' +
+        `${JSON_ONLY} 모양: {"plants": [{"name": "복선을 부를 짧은 이름 (예: 은열쇠)", "quote": "원고에서 그대로 옮긴 문장 일부 (한 글자도 바꾸지 않음)", "why": "왜 복선으로 보이는지 한 문장"}], "payoffs": [{"name": "거둔 복선 이름", "quote": "원고에서 그대로 옮긴 문장 일부", "why": "무엇을 거두는지 한 문장"}]}`,
+    },
+    { role: 'user', content: `이미 표시한 복선: ${known.length ? known.slice(0, 100).join(', ') : '(없음)'}\n\n앞 장 자료:\n${previous.trim() || '(없음)'}\n\n지금 장: ${title || '(제목 없음)'}\n원고:\n${clip(body).text}` },
+  ];
+}
+export interface ClueHint {
+  name: string;
+  quote: string;
+  why: string;
+}
+export function parseClues(o: Record<string, unknown>): { plants: ClueHint[]; payoffs: ClueHint[] } {
+  const one = (v: unknown) =>
+    arr(v)
+      .map((x) => ({ name: s(x.name, 30), quote: s(x.quote, 300), why: s(x.why, 200) }))
+      .filter((x) => x.name && x.quote)
+      .slice(0, 8);
+  return { plants: one(o.plants), payoffs: one(o.payoffs) };
 }
 
 // ---------------------------------------------------------------- 대사
@@ -250,6 +278,10 @@ export function fakeTool(sys: string, user: string): string | null {
   if (sys.includes(MARK.polish)) {
     const first = user.replace(/^문단:\n/, '').split(/(?<=[.!?。])\s+/)[0]?.trim() ?? '';
     return JSON.stringify({ edits: first ? [{ before: first, after: first.replace(/\s+/g, ' ') + ' (가짜 퇴고)', why: '가짜: 리듬' }] : [] });
+  }
+  if (sys.includes(MARK.clues)) {
+    const q = user.split('원고:\n')[1]?.split(/[.!?\n]/).find((x) => x.trim().length > 4)?.trim() ?? '';
+    return JSON.stringify({ plants: q ? [{ name: '가짜 복선', quote: q.slice(0, 20), why: '가짜: 뒤에서 다시 나올 것 같다.' }] : [], payoffs: [] });
   }
   if (sys.includes(MARK.questions)) return JSON.stringify({ questions: [{ q: '이 인물은 여기서 무엇을 원하지?', about: '주인공' }, { q: '이 장면이 끝날 때 무엇이 달라져야 하지?', about: '' }] });
   if (sys.includes(MARK.dialogue)) {

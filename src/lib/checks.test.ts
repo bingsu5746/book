@@ -52,3 +52,22 @@ describe('이름 표기 흔들림', () => {
     expect(replaceVariant('홍셜이 왔다. 김홍셜. 홍셜', '홍셜', '홍설')).toBe('홍설이 왔다. 김홍셜. 홍설');
   });
 });
+
+import { clueMarker, collectClues, markerSpot } from './clues';
+describe('복선 장부', () => {
+  it('깐 곳 · 거둔 곳을 이름으로 모은다', () => {
+    const c = collectClues([
+      { id: 'a', body: '은열쇠가 있었다.%%복선: 은열쇠 - 할머니 것%% 그리고 %%떡밥:편지%%' },
+      { id: 'b', body: '문이 열렸다. %%회수: 은열쇠%%' },
+    ]);
+    expect(c).toEqual([
+      { name: '은열쇠', plants: [{ nodeId: 'a', at: 9, note: '할머니 것' }], payoffs: [{ nodeId: 'b', at: 8, note: '' }] },
+      { name: '편지', plants: [{ nodeId: 'a', at: 33, note: '' }], payoffs: [] },
+    ]);
+  });
+  it('표시는 인용이 든 문장 끝에', () => {
+    const body = '그녀는 은열쇠를 쥐었다. 바람이 불었다.';
+    expect(body.slice(0, markerSpot(body, 4, 3))).toBe('그녀는 은열쇠를 쥐었다.');
+    expect(clueMarker('payoff', '편지')).toBe('%%회수: 편지%%');
+  });
+});

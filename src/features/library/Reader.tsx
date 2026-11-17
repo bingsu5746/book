@@ -2,6 +2,7 @@
 // 읽던 자리는 (장 id, 장 안 글자 위치)로 저장해서 화면 크기가 달라도 같은 곳이 열린다.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { recapMaterial } from '../../lib/aitools';
+import { gather, whoAppears } from '../../lib/gather';
 import { api } from '../../lib/api';
 import { local } from '../../lib/idb';
 import { buildBlocks, pageOf, paginate, type Page, type TocEntry } from '../../lib/paginate';
@@ -70,6 +71,7 @@ export function Reader({
   forceMode,
   initialFind,
   lineBreaks = false,
+  localOnly = false,
 }: {
   title: string;
   nodes: ReadNode[];
@@ -87,7 +89,10 @@ export function Reader({
   initialFind?: string;
   /** 한 번 친 엔터를 줄바꿈으로 (내가 쓴 책) */
   lineBreaks?: boolean;
+  /** 로그인 없이 읽기: 읽던 자리는 기기에만, 책갈피 · 밑줄 · AI 는 끈다 */
+  localOnly?: boolean;
 }) {
+  const canMark = !!progressKey && !localOnly;
   const [prefs, setPrefsState] = useState<ReaderPrefs>(loadPrefs);
   const setPrefs = (p: Partial<ReaderPrefs>) =>
     setPrefsState((old) => {
@@ -96,7 +101,7 @@ export function Reader({
       return v;
     });
   const mode = forceMode ?? prefs.mode;
-  const [pop, setPop] = useState<'' | 'toc' | 'set' | 'marks' | 'find' | 'more' | 'recap'>(initialFind ? 'find' : '');
+  const [pop, setPop] = useState<'' | 'toc' | 'set' | 'marks' | 'find' | 'more' | 'recap' | 'people'>(initialFind ? 'find' : '');
   const [chrome, setChrome] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -131,7 +136,7 @@ export function Reader({
   const readSelection = () => {
     setTimeout(() => {
       const s = getSelection();
-      if (!s || s.isCollapsed || !s.rangeCount || !progressKey) return setSelPop(null);
+      if (!s || s.isCollapsed || !s.rangeCount || !canMark) return setSelPop(null);
       const r = s.getRangeAt(0);
       const start = (r.startContainer.nodeType === 1 ? (r.startContainer as Element) : r.startContainer.parentElement)?.closest<HTMLElement>('[data-n]');
       if (!start) return setSelPop(null);
@@ -146,7 +151,7 @@ export function Reader({
     }, 10);
   };
   const addLine = async (withNote: boolean) => {
-    if (!selPop || !progressKey) return;
+    if (!selPop || !progressKey || !canMark) return;
     const note = withNote ? await promptBox('밑줄에 남길 메모', '', { multiline: true, ok: '남기기' }) : '';
     if (note == null) return;
     try {
@@ -184,7 +189,7 @@ export function Reader({
     return !!s && (order.indexOf(s.n) > 0 || s.o > 2000);
   };
   useEffect(() => {
-    if (lastAt && Date.now() - lastAt > RECAP_AFTER && startedFar()) setOfferRecap(true);
+    if (!localOnly && lastAt && Date.now() - lastAt > RECAP_AFTER && startedFar()) setOfferRecap(true);
   }, [lastAt]); // eslint-disable-line react-hooks/exhaustive-deps
   const showRecap = async () => {
     setOfferRecap(false);
@@ -214,6 +219,12 @@ export function Reader({
   useEffect(() => {
     if (start || !progressKey) return;
     const localSpot = local.get<(Spot & { at: number }) | null>(`prog:${progressKey}`, null);
+    if (localOnly) {
+      // 로그인 없이 읽는 링크: 읽던 자리는 이 기기에만
+      spot.current = localSpot;
+      setReady(true);
+      return;
+    }
     api<{ progress: Record<string, { n: string; o: number; at: number }> }>('progress')
       .then((r) => {
         const s = r.progress[progressKey];
@@ -244,9 +255,10 @@ export function Reader({
       const at = Date.now();
       local.set(`prog:${progressKey}`, { ...data, at });
       clearTimeout(saveTimer.current);
+      if (localOnly) return;
       saveTimer.current = window.setTimeout(() => void api(`progress/${progressKey}`, { method: 'PUT', body: { data, at } }).catch(() => {}), 1500);
     },
-    [progressKey, order],
+    [progressKey, order, localOnly],
   );
 
   // ---------- 쪽 넘김 ----------
@@ -543,7 +555,7 @@ export function Reader({
   const here = (): Spot | null => spot.current;
   const addMark = async () => {
     const s = here();
-    if (!s || !progressKey) return;
+    if (!s || !progressKey || !canMark) return;
     const el = (mode === 'page' ? stageRef.current : scrollRef.current)?.querySelector<HTMLElement>(`[data-n="${s.n}"]`);
     const quote = (el?.textContent ?? '').slice(0, 80);
     try {
@@ -555,6 +567,11 @@ export function Reader({
     }
   };
 
+  // 인물별로 모아 읽기
+  const [gathering, setGathering] = useState<EntryRef | null>(null);
+  const gBlocks = useMemo(() => (pop === 'people' || gathering ? blocks.map((b) => ({ n: b.dataset.n ?? '', o: Number(b.dataset.o ?? 0), text: b.textContent ?? '', head: b.dataset.toc !== undefined })) : []), [pop, gathering, blocks]);
+  const people = useMemo(() => (pop === 'people' && entries?.length ? whoAppears(gBlocks, entries) : []), [pop, gBlocks, entries]);
+  const gathered = useMemo(() => (gathering ? gather(gBlocks, [gathering.name, ...gathering.aliases]) : []), [gathering, gBlocks]);
   const findHits = useMemo(() => {
     const q = find.trim();
     if (q.length < 1) return [];
@@ -662,14 +679,22 @@ export function Reader({
               <Icon name="search" size={16} />책 안에서 찾기
             </span>
           </button>
-          {progressKey && (
+          {!!entries?.length && (
+            <button className="toc-item" role="menuitem" onClick={() => setPop('people')}>
+              <span className="row">
+                <Icon name="people" size={16} />
+                인물별로 모아 읽기
+              </span>
+            </button>
+          )}
+          {canMark && (
             <button className="toc-item" role="menuitem" onClick={() => setPop('marks')}>
               <span className="row">
                 <Icon name="bookmark" size={16} />책갈피 · 밑줄 {marks.length ? <span style={{ color: 'var(--rmuted)' }}>{marks.length}</span> : null}
               </span>
             </button>
           )}
-          {progressKey && (
+          {canMark && (
             <button className="toc-item" role="menuitem" onClick={() => (setPop(''), void addMark())}>
               <span className="row">
                 <Icon name="plus" size={16} />
@@ -677,12 +702,14 @@ export function Reader({
               </span>
             </button>
           )}
-          <button className="toc-item" role="menuitem" onClick={() => void showRecap()}>
-            <span className="row">
-              <Icon name="history" size={16} />
-              지난 이야기 (AI)
-            </span>
-          </button>
+          {!localOnly && (
+            <button className="toc-item" role="menuitem" onClick={() => void showRecap()}>
+              <span className="row">
+                <Icon name="history" size={16} />
+                지난 이야기 (AI)
+              </span>
+            </button>
+          )}
           {speakSupported() && (
             <button className="toc-item" role="menuitem" onClick={() => (setPop(''), speakNow())}>
               <span className="row">
@@ -929,6 +956,45 @@ export function Reader({
         </div>
       )}
 
+      {pop === 'people' && (
+        <div className="r-pop" role="dialog" aria-label="인물별로 모아 읽기">
+          <h3>누가 나오는 문단만 읽을까요</h3>
+          {!people.length && <p className="pad tiny" style={{ color: 'var(--rmuted)' }}>세계관 항목 이름이 나오는 문단이 없어요.</p>}
+          {people.map(({ e, n }) => (
+            <button key={e.id} className="toc-item" onClick={() => (setPop(''), setGathering(e))}>
+              <span>
+                {e.name} <span style={{ color: 'var(--rmuted)', fontSize: 12 }}>{e.type}</span>
+              </span>
+              <span>{n}문단</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {gathering && (
+        <div className="r-gather" role="dialog" aria-label={`${gathering.name}이(가) 나오는 문단`}>
+          <div className="r-gather-head">
+            <button className="icon-btn" aria-label="닫기" onClick={() => setGathering(null)}>
+              <Icon name="back" />
+            </button>
+            <b>{gathering.name}</b>
+            <span className="tiny" style={{ color: 'var(--rmuted)' }}>
+              {gathered.reduce((s, g) => s + g.paras.length, 0)}문단 · 누르면 그 자리로
+            </span>
+          </div>
+          <div className="r-gather-body prose">
+            {gathered.map((g, i) => (
+              <section key={i}>
+                {g.title && <h2>{g.title}</h2>}
+                {g.paras.map((p, k) => (
+                  <p key={k} className="r-gather-p" onClick={() => (setGathering(null), jump({ n: g.n, o: p.o }))}>
+                    {markNames(p.text, [gathering.name, ...gathering.aliases])}
+                  </p>
+                ))}
+              </section>
+            ))}
+          </div>
+        </div>
+      )}
       {pop === 'recap' && (
         <div className="r-pop r-recap" role="dialog" aria-label="지난 이야기">
           <h3>지난 이야기</h3>
@@ -1058,4 +1124,12 @@ export function Reader({
       )}
     </div>
   );
+}
+
+/** 문단 글에서 이름에 옅은 표시 */
+function markNames(text: string, names: string[]) {
+  const ns = names.map((x) => x.trim()).filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!ns.length) return text;
+  const re = new RegExp(`(${ns.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g');
+  return text.split(re).map((part, i) => (ns.includes(part) ? <mark key={i}>{part}</mark> : part));
 }

@@ -6,7 +6,8 @@ import { makeEpub } from '../../lib/epub';
 import { local } from '../../lib/idb';
 import { go } from '../../lib/router';
 import { flatten, loadFull, onSaveState, pushDraft, saveBody, toReadNodes, type FullBook } from '../../lib/store';
-import { charsNoSpace, charsWithSpace, fmtNum, manuscriptPages, plain } from '../../lib/text';
+import { ago, charsNoSpace, charsWithSpace, fmtNum, manuscriptPages, plain } from '../../lib/text';
+import { deviceId, deviceLabel } from '../../lib/device';
 import { KIND_LABEL, type BookNode, type NodeKind } from '../../lib/types';
 import { confirmBox, Icon, Menu, Modal, promptBox, Spinner, toast } from '../../lib/ui';
 import { entriesOf, loadWorld, newItemId, saveItems, toRefs, type Entry, type WItem } from '../../lib/world';
@@ -14,6 +15,7 @@ import { Binder, type BinderActions } from './Binder';
 import { Editor, type EditorHandle } from './Editor';
 import { TidyBreaks } from './TidyBreaks';
 import { NameCheck } from './NameCheck';
+import { ClueLedger } from './ClueLedger';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
 import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
@@ -23,10 +25,10 @@ import { infoGaps, mergeInfo, shouldAutoFill, type ChapterInfo } from '../../lib
 import { dictationSupported, startDictation } from '../../lib/dictate';
 import { JotPicker } from '../Jots';
 
-type View = 'plan' | 'write' | 'cork' | 'outline' | 'threads' | 'replace' | 'stats' | 'notes' | 'settings';
-const VIEWS: View[] = ['plan', 'write', 'cork', 'outline', 'threads', 'replace', 'stats', 'notes', 'settings'];
-const VIEW_LABEL: Record<View, string> = { plan: '구상 (줄거리 먼저)', write: '원고', cork: '코르크보드', outline: '개요', threads: '플롯 선', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
-const VIEW_ICON: Record<View, string> = { plan: 'note', write: 'pen', cork: 'grid', outline: 'layers', threads: 'share', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
+type View = 'plan' | 'write' | 'cork' | 'outline' | 'threads' | 'clues' | 'replace' | 'stats' | 'notes' | 'settings';
+const VIEWS: View[] = ['plan', 'write', 'cork', 'outline', 'threads', 'clues', 'replace', 'stats', 'notes', 'settings'];
+const VIEW_LABEL: Record<View, string> = { plan: '구상 (줄거리 먼저)', write: '원고', cork: '코르크보드', outline: '개요', threads: '플롯 선', clues: '복선 장부', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
+const VIEW_ICON: Record<View, string> = { plan: 'note', write: 'pen', cork: 'grid', outline: 'layers', threads: 'share', clues: 'link', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
 interface WsPrefs {
   binder: boolean;
   side: boolean;
@@ -154,12 +156,29 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
     dispatchEvent(new HashChangeEvent('hashchange'));
   };
 
+  const spotTimer = useRef(0);
+  /** 이 기기에서 이 책을 마지막으로 쓴 때 (열자마자 지금 시각으로 바뀌기 전 값) */
+  const openedAt = useRef(local.get<number>(`lastNodeAt:${bookId}`, 0));
+  const saveSpot = useCallback(
+    (id: string) => {
+      const at = Date.now();
+      local.set(`lastNode:${bookId}`, id);
+      local.set(`lastNodeAt:${bookId}`, at);
+      clearTimeout(spotTimer.current);
+      spotTimer.current = window.setTimeout(() => {
+        const o = editor.current?.view?.state.selection.main.head ?? 0;
+        void api(`progress/w:${bookId}`, { method: 'PUT', body: { data: { n: id, o, dev: deviceId(), d: deviceLabel() }, at: Date.now() } }).catch(() => {});
+      }, 3000);
+    },
+    [bookId],
+  );
   const updateNode = useCallback((id: string, p: Partial<BookNode>) => setData((d) => (d ? { ...d, nodes: d.nodes.map((n) => (n.id === id ? { ...n, ...p } : n)) } : d)), []);
 
   const onBody = useCallback(
     (id: string, body: string) => {
       lastType.current = Date.now();
       updateNode(id, { body, chars: charsNoSpace(body) });
+      saveSpot(id);
       clearTimeout(timers.current.get(id));
       timers.current.set(
         id,
@@ -174,7 +193,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         }, 900),
       );
     },
-    [bookId, updateNode],
+    [bookId, updateNode, saveSpot],
   );
 
   const patchNode = async (id: string, p: Partial<BookNode>) => {
@@ -378,10 +397,28 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
     planChecked.current = true;
     if (!q0.get('view') && !data.nodes.some((n) => !n.deleted && (n.body ?? '').trim())) setView('plan');
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
-  // 쓰던 장을 기억해 두었다가 다음에 그 장으로 연다
+  // 쓰던 장을 기억해 두었다가 다음에 그 장으로 연다 (기기에, 그리고 서버에: 다른 기기에서 이어 쓰기)
   useEffect(() => {
-    if (sel) local.set(`lastNode:${bookId}`, sel.id);
+    if (sel) saveSpot(sel.id);
   }, [sel?.id, bookId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 열 때: 다른 기기에서 더 나중에 쓴 자리가 있으면 그 장 · 그 자리로
+  const spotChecked = useRef(false);
+  useEffect(() => {
+    if (!data || spotChecked.current) return;
+    spotChecked.current = true;
+    if (nodeId) return;
+    const localAt = openedAt.current;
+    api<{ progress: Record<string, { n: string; o: number; at: number; dev?: string; d?: string }> }>('progress')
+      .then((r) => {
+        const s = r.progress[`w:${bookId}`];
+        if (!s || s.dev === deviceId() || s.at <= localAt + 2000) return;
+        if (!data.nodes.some((n) => n.id === s.n && !n.deleted)) return;
+        select(s.n);
+        setTimeout(() => editor.current?.select(s.o, s.o), 400);
+        toast(`${s.d ?? '다른 기기'}에서 ${ago(s.at)} 쓰던 자리로 왔어요.`);
+      })
+      .catch(() => {});
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openSpell = () => {
     setView('write');
@@ -766,6 +803,24 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             onOpen={(id, f) => {
               select(id);
               if (f) setTimeout(() => editor.current?.find(f), 250);
+            }}
+          />
+        )}
+        {view === 'clues' && (
+          <ClueLedger
+            nodes={ordered}
+            current={sel?.id ?? null}
+            flush={flush}
+            onOpen={(id, f) => {
+              select(id);
+              setTimeout(() => editor.current?.find(f), 250);
+            }}
+            onInsert={(id, at, text) => {
+              const n = dataRef.current?.nodes.find((x) => x.id === id);
+              if (!n) return;
+              const b = n.body ?? '';
+              onBody(id, b.slice(0, at) + text + b.slice(at));
+              if (sel?.id === id) setEdKey((k) => k + 1);
             }}
           />
         )}

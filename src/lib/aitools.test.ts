@@ -84,3 +84,29 @@ describe('지난 이야기 자료', () => {
     expect(recapMaterial(blocks, ['a'], { n: 'x', o: 0 })).toBe('');
   });
 });
+
+import { gather, whoAppears } from './gather';
+describe('인물별로 모아 읽기', () => {
+  const blocks = [
+    { n: 'a', o: 0, text: '1장', head: true },
+    { n: 'a', o: 0, text: '홍설이 웃었다.' },
+    { n: 'a', o: 9, text: '바람이 불었다.' },
+    { n: 'b', o: 0, text: '2장', head: true },
+    { n: 'b', o: 0, text: '설이는 걸었다.' },
+    { n: 'b', o: 8, text: '민우가 왔다.' },
+  ];
+  it('이름 · 다른 이름이 나오는 문단만, 장 제목 아래로', () => {
+    expect(gather(blocks, ['홍설', '설이'])).toEqual([
+      { title: '1장', n: 'a', paras: [{ o: 0, text: '홍설이 웃었다.' }] },
+      { title: '2장', n: 'b', paras: [{ o: 0, text: '설이는 걸었다.' }] },
+    ]);
+  });
+  it('나오는 항목과 문단 수', () => {
+    const r = whoAppears(blocks, [
+      { name: '홍설', aliases: ['설이'] },
+      { name: '민우', aliases: [] },
+      { name: '서진', aliases: [] },
+    ]);
+    expect(r.map((x) => `${x.e.name}${x.n}`)).toEqual(['홍설2', '민우1']);
+  });
+});

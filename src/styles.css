@@ -3804,3 +3804,157 @@ details.more > label.field {
     display: none;
   }
 }
+/* 리더: 인물별로 모아 읽기 */
+.r-gather {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  background: var(--paper);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+}
+.r-gather-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rline);
+  font-family: var(--sans);
+}
+.r-gather-body {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 20px 80px;
+  width: 100%;
+  max-width: 36em;
+  margin: 0 auto;
+  font-family: var(--rfont);
+  font-size: var(--fs);
+  line-height: var(--lh);
+}
+.r-gather-body h2 {
+  font-size: 0.9em;
+  color: var(--rmuted);
+  margin: 1.6em 0 0.6em;
+  letter-spacing: 0.04em;
+}
+.r-gather-p {
+  margin: 0 0 0.9em;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.r-gather-p:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+.r-gather-p mark {
+  background: color-mix(in srgb, #d9a441 26%, transparent);
+  color: inherit;
+}
+/* 복선 장부 */
+.clue-row {
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  cursor: default;
+}
+.clue-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 140px;
+}
+.clue-state {
+  font-size: 11.5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.clue-state.open {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--soft);
+}
+.clue-spots {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  flex: 1;
+}
+.clue-note {
+  width: 100%;
+}
+/* 장별 흐름 */
+.flow {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 12px;
+  align-items: end;
+}
+.flow-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.flow-bars {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  height: 64px;
+  border-bottom: 1px solid var(--line);
+}
+.flow-bar {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 1px;
+}
+.flow-bar i {
+  display: block;
+  width: 100%;
+  background: var(--accent);
+  border-radius: 3px 3px 0 0;
+  opacity: 0.75;
+}
+.flow-bar:hover i {
+  opacity: 1;
+}
+.flow-med {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--line-strong);
+  pointer-events: none;
+}
+.flow-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-left: 192px;
+}
+.flow-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  width: 100%;
+}
+.flow-table th,
+.flow-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+}
+.flow-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .flow {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .flow-axis {
+    margin-left: 0;
+  }
+}

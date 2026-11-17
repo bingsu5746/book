@@ -16,6 +16,7 @@ import { Workspace } from './features/studio/Workspace';
 import { WorldsHome } from './features/world/WorldsHome';
 import { WorldView } from './features/world/WorldView';
 import { Hall } from './features/community/Hall';
+import { PublicReader } from './features/library/PublicReader';
 import { EditionReader } from './features/community/EditionReader';
 import { Account } from './features/account/Account';
 import { LinesPage } from './features/library/LinesPage';
@@ -110,6 +111,14 @@ export function App() {
       });
   }, []);
 
+  // 로그인 없는 읽기 링크는 가입 · 로그인 없이 연다
+  if (parts[0] === 'p' && /^[a-f0-9]{32}$/.test(parts[1] ?? ''))
+    return (
+      <>
+        <PublicReader token={parts[1]} />
+        <Toaster />
+      </>
+    );
   if (user === undefined)
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
