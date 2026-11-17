@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../lib/api';
 import { BookCard, charsLabel, Cover } from '../../lib/BookCard';
+import type { CoverStyle } from '../../lib/cover';
 import { useSession } from '../../lib/session';
 import { splitMarkdown } from '../../lib/split';
 import { cacheMyBooks, cachedBooks, cachedKeys, createBookFrom } from '../../lib/store';
@@ -44,6 +45,8 @@ export function LibraryHome() {
   const [offline, setOffline] = useState(false);
   const [sort, setSort] = useState<'updated' | 'read' | 'title'>(() => local.get('libSort', 'updated'));
   const [weekRead, setWeekRead] = useState(0);
+  const [backupHidden, setBackupHidden] = useState(false);
+  const [readFilter, setReadFilter] = useState<'' | 'want' | 'reading' | 'done'>('');
   useEffect(() => {
     api<{ read: { day: string; secs: number }[] }>('stats')
       .then((r) => {
@@ -95,7 +98,9 @@ export function LibraryHome() {
       sort === 'title' ? a.title.localeCompare(b.title, 'ko') : sort === 'read' ? (progress[`b:${b.id}`]?.at ?? 0) - (progress[`b:${a.id}`]?.at ?? 0) : b.updated - a.updated,
     );
   const mine = order(live.filter((b) => b.kind === 'write'));
-  const read = order(live.filter((b) => b.kind === 'read'));
+  const readAll = order(live.filter((b) => b.kind === 'read'));
+  const read = readAll.filter((b) => !readFilter || (b.meta.readStatus ?? 'reading') === readFilter);
+  const doneThisYear = readAll.filter((b) => b.meta.readStatus === 'done' && (b.meta.finishedAt ?? '').startsWith(String(new Date().getFullYear()))).length;
   const SORTS = { updated: '최근 고친 순', read: '최근 읽은 순', title: '제목 순' } as const;
   const sortMenu = (
     <Menu label="정렬" text={SORTS[sort]}>
@@ -114,8 +119,8 @@ export function LibraryHome() {
   const prog = (key: string) => progress[key];
   // 이어 읽기: 가장 최근에 읽은 것
   const recent = [
-    ...live.map((b) => ({ key: `b:${b.id}`, title: b.title, author: b.author, color: b.color, seed: b.id, href: `#/read/${b.id}` })),
-    ...shared.map((s) => ({ key: `e:${s.id}`, title: s.title, author: s.owner_name, color: s.color, seed: s.id, href: `#/edition/${s.edition_id}` })),
+    ...live.map((b) => ({ key: `b:${b.id}`, title: b.title, author: b.author, color: b.color, seed: b.id, href: `#/read/${b.id}`, style: b.meta?.coverStyle as CoverStyle | undefined })),
+    ...shared.map((s) => ({ key: `e:${s.id}`, title: s.title, author: s.owner_name, color: s.color, seed: s.id, href: `#/edition/${s.edition_id}`, style: undefined as CoverStyle | undefined })),
   ]
     .filter((x) => prog(x.key) && (prog(x.key).f ?? 0) < 0.999)
     .sort((a, b) => prog(b.key).at - prog(a.key).at);
@@ -130,6 +135,7 @@ export function LibraryHome() {
           <p className="sub">
             내가 쓴 책, 들인 책, 친구가 공유한 책을 한곳에서 읽어요.
             {!!weekRead && <> · 최근 7일 {fmtMinutes(weekRead)} 읽음</>}
+            {!!doneThisYear && <> · 올해 {doneThisYear}권 다 읽음</>}
           </p>
         </div>
         <div className="actions">
@@ -161,7 +167,7 @@ export function LibraryHome() {
       {offline && <p className="note-box" style={{ marginBottom: 20 }}>인터넷에 연결되어 있지 않아 이 기기에 받아 둔 책만 보여요. 쓴 글은 기기에 저장했다가 연결되면 보내요.</p>}
       {cont && (
         <a className="hero" href={cont.href} style={{ textDecoration: 'none', color: 'inherit' }}>
-          <Cover title={cont.title} color={cont.color} seed={cont.seed} />
+          <Cover title={cont.title} color={cont.color} seed={cont.seed} author={cont.author} style={cont.style} />
           <div className="grow">
             <p className="tiny muted" style={{ letterSpacing: '.1em' }}>
               이어 읽기
@@ -195,7 +201,7 @@ export function LibraryHome() {
         {mine.length ? (
           <div className="cards">
             {mine.map((b) => (
-              <BookCard key={b.id} title={b.title} by={b.author} color={b.color} seed={b.id} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', dev(b.id)]} />
+              <BookCard key={b.id} title={b.title} by={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', dev(b.id)]} />
             ))}
           </div>
         ) : (
@@ -255,14 +261,30 @@ export function LibraryHome() {
       <section className="section">
         <div className="section-head">
           <h2>들인 책</h2>
-          {read.length > 1 && sortMenu}
+          {readAll.length > 1 && sortMenu}
+          {readAll.length > 1 && (
+            <div className="seg" style={{ marginLeft: 'auto' }}>
+              {(
+                [
+                  ['', '전체'],
+                  ['reading', '읽는 중'],
+                  ['done', '다 읽음'],
+                  ['want', '읽고 싶어요'],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k || 'all'} className={readFilter === k ? 'on' : ''} onClick={() => setReadFilter(k)}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
           <span className="count">{read.length}권</span>
         </div>
         {read.length ? (
           <div className="cards">
             {read.map((b) => (
               <div key={b.id} style={{ position: 'relative' }}>
-                <BookCard title={b.title} by={b.author} color={b.color} seed={b.id} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[charsLabel(b.total_chars), String(b.meta?.source ?? '').toUpperCase(), dev(b.id)]} />
+                <BookCard title={b.title} by={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/read/${b.id}`} progress={prog(`b:${b.id}`)?.f ?? null} meta={[b.meta.readStatus === 'done' ? `다 읽음${b.meta.finishedAt ? ` ${b.meta.finishedAt.slice(5).replace('-', '.')}` : ''}` : b.meta.readStatus === 'want' ? '읽고 싶어요' : '', b.meta.readStars ? '★'.repeat(b.meta.readStars) : '', charsLabel(b.total_chars), dev(b.id)]} />
                 <div style={{ position: 'absolute', top: 6, right: 6 }}>
                   <Menu label="책 메뉴">
                     {(close) => (
@@ -295,6 +317,8 @@ export function LibraryHome() {
               </div>
             ))}
           </div>
+        ) : readAll.length ? (
+          <p className="muted small">이 표시에 맞는 책이 없어요.</p>
         ) : live.length ? (
           <p className="muted small">
             가지고 있는 EPUB · TXT · PDF · Word 파일을 <button className="link-btn" onClick={() => setImporting(true)}>들이거나</button>, 저작권이 끝난 책을 <a href="#/discover">찾아</a> 넣을 수 있어요.
@@ -353,6 +377,21 @@ export function LibraryHome() {
             ))}
           </div>
         </section>
+      )}
+      {!offline && mine.length > 0 && Date.now() - local.get<number>('lastBackup', 0) > 14 * 86_400_000 && !backupHidden && (
+        <p className="muted small" style={{ marginTop: 8 }}>
+          {local.get<number>('lastBackup', 0) ? `마지막 백업이 ${Math.floor((Date.now() - local.get<number>('lastBackup', 0)) / 86_400_000)}일 전이에요.` : '아직 내 자료를 백업한 적이 없어요.'}{' '}
+          <a href="#/account">계정 → 전부 내려받기</a> ·{' '}
+          <button
+            className="link-btn"
+            onClick={() => {
+              local.set('lastBackup', Date.now() - 7 * 86_400_000);
+              setBackupHidden(true);
+            }}
+          >
+            일주일 뒤에 다시
+          </button>
+        </p>
       )}
       {importing && (
         <ImportDialog

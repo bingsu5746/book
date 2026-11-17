@@ -1,11 +1,10 @@
-import { coverOf } from './colors';
+import { coverSvg, type CoverStyle } from './cover';
 import { fmtNum } from './text';
 
-export function BookCard({ title, by, color, seed, meta, progress, href, onClick }: { title: string; by?: string; color?: string; seed: string; meta?: React.ReactNode[]; progress?: number | null; href?: string; onClick?: () => void }) {
-  const [bg] = coverOf(color, seed);
+export function BookCard({ title, by, color, seed, meta, progress, href, onClick, author, coverStyle }: { title: string; by?: string; color?: string; seed: string; meta?: React.ReactNode[]; progress?: number | null; href?: string; onClick?: () => void; author?: string; coverStyle?: string }) {
   const inner = (
     <>
-      <span className="spine" style={{ ['--cover' as string]: bg }} />
+      <span className="thumb" aria-hidden="true" dangerouslySetInnerHTML={{ __html: coverSvg({ title, author: author ?? by ?? '', color, id: seed, style: coverStyle as CoverStyle | undefined }) }} />
       <span className="inner">
         <span className="title">{title}</span>
         {by && <span className="by">{by}</span>}
@@ -35,12 +34,8 @@ export function BookCard({ title, by, color, seed, meta, progress, href, onClick
   );
 }
 
-export function Cover({ title, color, seed, small }: { title: string; color?: string; seed: string; small?: boolean }) {
-  const [bg, ink] = coverOf(color, seed);
-  return (
-    <div className={`cover${small ? ' small' : ''}`} style={{ ['--cover' as string]: bg, ['--cover-ink' as string]: ink }}>
-      {title}
-    </div>
-  );
+export function Cover({ title, color, seed, small, author = '', style }: { title: string; color?: string; seed: string; small?: boolean; author?: string; style?: CoverStyle }) {
+  const svg = coverSvg({ title, author, color, id: seed, style });
+  return <div className={`cover svg${small ? ' small' : ''}`} role="img" aria-label={`${title} 표지`} dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 export const charsLabel = (n?: number) => (n ? `${fmtNum(n)}자` : '빈 책');

@@ -10,7 +10,7 @@ import { ago, fmtNum, today } from '../../lib/text';
 import type { Book } from '../../lib/types';
 import { Empty, Icon, Menu, Modal, Spinner, toast, useAsync } from '../../lib/ui';
 import { ImportDialog } from '../library/ImportDialog';
-import { importSeed } from '../library/LibraryHome';
+import { fmtMinutes, importSeed } from '../library/LibraryHome';
 import { Heatmap, streakOf } from './Views';
 
 type Beat = [string, string];
@@ -100,8 +100,11 @@ export function StudioHome() {
   const [newOpen, setNewOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const { data, loading, error, reload } = useAsync(async () => {
-    const [b, s] = await Promise.all([api<{ books: Book[] }>('books'), api<{ days: { day: string; chars: number }[] }>('stats').catch(() => ({ days: [] }))]);
-    return { books: b.books.filter((x) => !x.deleted && x.kind === 'write'), days: new Map(s.days.map((d) => [d.day, d.chars])) };
+    const [b, s] = await Promise.all([api<{ books: Book[] }>('books'), api<{ days: { day: string; chars: number }[]; write?: { day: string; secs: number }[] }>('stats').catch(() => ({ days: [], write: [] }))]);
+    const since = new Date(Date.now() - 6 * 86_400_000).toLocaleDateString('sv-SE');
+    const todayKey = new Date().toLocaleDateString('sv-SE');
+    const ws = s.write ?? [];
+    return { books: b.books.filter((x) => !x.deleted && x.kind === 'write'), days: new Map(s.days.map((d) => [d.day, d.chars])), writeToday: ws.filter((d) => d.day === todayKey).reduce((a, d) => a + d.secs, 0), writeWeek: ws.filter((d) => d.day >= since).reduce((a, d) => a + d.secs, 0) };
   }, []);
   const week = useMemo(() => {
     if (!data) return 0;
@@ -149,6 +152,10 @@ export function StudioHome() {
           <div className="k">최근 7일</div>
         </div>
         <div className="stat">
+          <div className="v">{fmtMinutes(data!.writeToday)}</div>
+          <div className="k">오늘 쓴 시간 · 7일 {fmtMinutes(data!.writeWeek)}</div>
+        </div>
+        <div className="stat">
           <div className="v">{streakOf(days, 0)}일</div>
           <div className="k">연속으로 쓴 날</div>
         </div>
@@ -168,7 +175,7 @@ export function StudioHome() {
         {books.length ? (
           <div className="cards">
             {books.map((b) => (
-              <BookCard key={b.id} title={b.title} by={b.subtitle || b.author} color={b.color} seed={b.id} href={`#/write/${b.id}`} progress={b.goal_chars ? (b.total_chars ?? 0) / b.goal_chars : null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, `${ago(b.updated)} 고침`]} />
+              <BookCard key={b.id} title={b.title} by={b.subtitle || b.author} author={b.author} color={b.color} seed={b.id} coverStyle={b.meta?.coverStyle} href={`#/write/${b.id}`} progress={b.goal_chars ? (b.total_chars ?? 0) / b.goal_chars : null} meta={[charsLabel(b.total_chars), `${b.node_count ?? 0}장`, `${ago(b.updated)} 고침`]} />
             ))}
             <button className="card add" onClick={() => setNewOpen(true)}>
               <Icon name="plus" />새 책

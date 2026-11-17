@@ -30,6 +30,7 @@ export interface EditorHandle {
   find: (q: string) => void;
   setMarks: (m: { from: number; to: number; cls: string }[]) => void;
   focus: () => void;
+  insertText: (t: string) => void;
 }
 
 const style = HighlightStyle.define([
@@ -136,6 +137,8 @@ export interface EditorProps {
   dialogueTint: boolean;
   /** 세계관 이름 자동 완성 ([[ 없이 두 글자부터) */
   nameComplete?: boolean;
+  /** " ' 를 치면 둥근 따옴표로 */
+  smartQuotes?: boolean;
   onLinkClick?: (name: string) => void;
   /** 글을 고르면 그 자리(화면 좌표) — 서식 말풍선을 띄우려고 */
   onSelectRect?: (r: { x: number; y: number } | null) => void;
@@ -146,7 +149,15 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
   const viewRef = useRef<EditorView | null>(null);
   const propsRef = useRef(props);
   propsRef.current = props;
-  const modes = useRef({ focus: new Compartment(), tw: new Compartment(), deco: new Compartment() });
+  const modes = useRef({ focus: new Compartment(), tw: new Compartment(), deco: new Compartment(), quotes: new Compartment() });
+  const quoteExt = EditorView.inputHandler.of((view, from, to, text) => {
+    if (text !== '"' && text !== "'") return false;
+    const prev = view.state.sliceDoc(Math.max(0, from - 1), from);
+    const open = !prev || /[\s(\[{“‘「『—-]/.test(prev);
+    const q = text === '"' ? (open ? '“' : '”') : open ? '‘' : '’';
+    view.dispatch({ changes: { from, to, insert: q }, selection: { anchor: from + 1 } });
+    return true;
+  });
 
   const decoExt = (names: Set<string>, dialogue: boolean): Extension =>
     ViewPlugin.fromClass(
@@ -232,6 +243,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
           modes.current.deco.of(decoExt(nameSet(p.entries), p.dialogueTint)),
           modes.current.focus.of(p.focusMode ? focusPlugin : []),
           modes.current.tw.of(p.typewriterMode ? typewriter : []),
+          modes.current.quotes.of(p.smartQuotes ? quoteExt : []),
           keymap.of([
             { key: 'Mod-b', run: (v) => (wrapSel(v, '**'), true) },
             { key: 'Mod-i', run: (v) => (wrapSel(v, '*'), true) },
@@ -301,6 +313,10 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
     viewRef.current?.dispatch({ effects: modes.current.tw.reconfigure(props.typewriterMode ? typewriter : []) });
   }, [props.typewriterMode]);
   useEffect(() => {
+    viewRef.current?.dispatch({ effects: modes.current.quotes.reconfigure(props.smartQuotes ? quoteExt : []) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.smartQuotes]);
+  useEffect(() => {
     viewRef.current?.dispatch({ effects: modes.current.deco.reconfigure(decoExt(nameSet(props.entries), props.dialogueTint)) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.entries, props.dialogueTint]);
@@ -338,6 +354,14 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
     },
     setMarks: (m) => viewRef.current?.dispatch({ effects: setMarksEffect.of(m) }),
     focus: () => viewRef.current?.focus(),
+    insertText: (t) => {
+      const v = viewRef.current;
+      if (!v) return;
+      const r = v.state.selection.main;
+      const before = v.state.sliceDoc(Math.max(0, r.from - 1), r.from);
+      const text = (before && !/\s/.test(before) ? ' ' : '') + t;
+      v.dispatch({ changes: { from: r.from, to: r.to, insert: text }, selection: { anchor: r.from + text.length }, scrollIntoView: true });
+    },
   }));
 
   return <div className="ed-main" ref={host} />;

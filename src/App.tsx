@@ -20,6 +20,7 @@ import { EditionReader } from './features/community/EditionReader';
 import { Account } from './features/account/Account';
 import { LinesPage } from './features/library/LinesPage';
 import { QuickJump } from './features/QuickJump';
+import { JotsPage, QuickJot } from './features/Jots';
 
 const NAV = [
   { id: 'library', label: '서재', icon: 'library' },
@@ -145,6 +146,7 @@ export function App() {
   else if (top === 'discover') page = <Discover />;
   else if (top === 'account') page = <Account />;
   else if (top === 'lines') page = <LinesPage />;
+  else if (top === 'jots') page = <JotsPage />;
   else page = <LibraryHome />;
   const navOn = top === 'discover' || top === 'lines' ? 'library' : top;
 
@@ -168,6 +170,10 @@ export function App() {
                 )}
               </a>
             ))}
+            <a className={`nav-item${top === 'jots' ? ' on' : ''}`} href="#/jots">
+              <Icon name="note" />
+              수첩 <span className="faint tiny" style={{ marginLeft: 'auto' }}>{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘J' : 'Ctrl J'}</span>
+            </a>
             <button className="nav-item" onClick={() => dispatchEvent(new Event('quick-jump'))}>
               <Icon name="command" />
               빠른 이동 <span className="faint tiny" style={{ marginLeft: 'auto' }}>{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</span>
@@ -202,6 +208,7 @@ export function App() {
         </div>
       )}
       <QuickJump />
+      <QuickJot />
       <UpdateBanner />
       <Toaster />
     </SessionCtx.Provider>

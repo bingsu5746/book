@@ -11,6 +11,11 @@ export interface BookMeta {
   importedAt?: number;
   dailyGoal?: number;
   template?: string;
+  coverStyle?: string;
+  readStatus?: 'want' | 'reading' | 'done';
+  readStars?: number;
+  readNote?: string;
+  finishedAt?: string;
   [k: string]: unknown;
 }
 export interface Book {

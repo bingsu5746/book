@@ -139,3 +139,16 @@ describe('맞춤법 검사 (기본 규칙)', () => {
     expect(checkSpelling('“안녕 그가 말했다.').some((x) => x.rule === 'quote')).toBe(true);
   });
 });
+
+import { coverSvg, wrapTitle } from './cover';
+describe('글자 표지', () => {
+  it('제목을 낱말 단위로 줄 바꿈한다', () => {
+    expect(wrapTitle('새벽을 건너는 꿈', 8)).toEqual(['새벽을 건너는', '꿈']);
+    expect(wrapTitle('아주아주긴낱말하나로된제목', 5)).toEqual(['아주아주긴', '낱말하나로', '된제목']);
+  });
+  it('제목 속 기호를 SVG 안전하게', () => {
+    const s = coverSvg({ title: '<a & b>', author: '나', id: 'x' });
+    expect(s).toContain('&lt;a &amp; b&gt;');
+    expect(s).not.toContain('<a & b>');
+  });
+});

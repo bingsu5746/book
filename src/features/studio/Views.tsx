@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api';
 import { COVERS } from '../../lib/colors';
+import { Cover } from '../../lib/BookCard';
+import { COVER_STYLES, type CoverStyle } from '../../lib/cover';
 import { go } from '../../lib/router';
 import { flatten } from '../../lib/store';
-import { charsNoSpace, fmtDate, fmtNum, today } from '../../lib/text';
+import { ago, charsNoSpace, fmtDate, fmtNum, today } from '../../lib/text';
 import { KIND_LABEL, STATUS_LABEL, type Book, type BookNode, type NodeKind, type Status } from '../../lib/types';
 import { confirmBox, Icon, promptBox, Spinner, toast, useAsync } from '../../lib/ui';
 import type { World } from '../../lib/world';
@@ -299,6 +301,7 @@ export function BookNotes({ book, entries, onSave }: { book: Book; entries: Entr
 // ---------------------------------------------------------------- 책 설정 · 공유
 export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Book; nodes: BookNode[]; onPatch: (p: Record<string, unknown>) => void; onWorldLinked: (id: string | null) => void }) {
   const [cmp, setCmp] = useState<{ id: string; number: number } | null>(null);
+  const readers = useAsync(() => api<{ readers: { nickname: string; at: number; f: number; node_title: string }[] }>(`books/${book.id}/readers`), [book.id]);
   const worlds = useAsync(() => api<{ worlds: World[] }>('worlds'), []);
   const [editions, setEditions] = useState<{ id: string; number: number; note: string; created: number; chars: number }[] | null>(null);
   const [shared, setShared] = useState(!!book.shared);
@@ -338,12 +341,29 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
           지은이 (표지에 보이는 이름)
           <input className="input" defaultValue={book.author} onBlur={(e) => e.target.value !== book.author && onPatch({ author: e.target.value })} />
         </label>
-        <div className="field">
-          표지 색
-          <div className="row wrap">
-            {COVERS.map(([bg]) => (
-              <button key={bg} className={`swatch${book.color === bg ? ' on' : ''}`} style={{ background: bg }} aria-label={`표지 색 ${bg}`} onClick={() => onPatch({ color: bg })} />
-            ))}
+        <div className="row" style={{ gap: 18, alignItems: 'flex-start' }}>
+          <div style={{ width: 120, flex: 'none' }}>
+            <Cover title={book.title} author={book.author} color={book.color} seed={book.id} style={book.meta.coverStyle as CoverStyle | undefined} />
+          </div>
+          <div className="stack grow" style={{ gap: 10 }}>
+            <div className="field">
+              표지 모양
+              <div className="seg">
+                {COVER_STYLES.map((c) => (
+                  <button key={c.id} className={(book.meta.coverStyle ?? 'classic') === c.id ? 'on' : ''} onClick={() => onPatch({ meta: { ...book.meta, coverStyle: c.id } })}>
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="field">
+              표지 색
+              <div className="row wrap">
+                {COVERS.map(([bg]) => (
+                  <button key={bg} className={`swatch${book.color === bg ? ' on' : ''}`} style={{ background: bg }} aria-label={`표지 색 ${bg}`} onClick={() => onPatch({ color: bg })} />
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -450,6 +470,23 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
           </div>
         )}
       </section>
+      {!!readers.data?.readers.length && (
+        <section className="panel stack">
+          <h3 className="serif">친구가 읽은 자리</h3>
+          <div className="list">
+            {readers.data.readers.map((r) => (
+              <div key={r.nickname} className="list-item">
+                <b>{r.nickname}</b>
+                <span className="grow muted small">{r.f >= 0.999 ? '다 읽었어요' : r.node_title ? `「${r.node_title}」까지` : ''}</span>
+                <span className="meter" style={{ width: 90, margin: 0 }}>
+                  <i style={{ width: `${Math.round(r.f * 100)}%` }} />
+                </span>
+                <span className="faint tiny">{ago(r.at)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       {cmp && <EditionDiff editionId={cmp.id} number={cmp.number} nodes={nodes} onClose={() => setCmp(null)} />}
       <section className="panel stack">
         <h3 className="serif">책 종류</h3>

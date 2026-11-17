@@ -2,6 +2,7 @@
 import { strToU8, zipSync, type Zippable } from 'fflate';
 import { renderMd } from './md';
 import type { ReadNode } from './types';
+import { coverSvg, type CoverStyle } from './cover';
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!);
 
@@ -32,7 +33,7 @@ ${body}
 </body>
 </html>`;
 
-export function makeEpub(book: { title: string; author: string; id: string }, nodes: ReadNode[]): Uint8Array {
+export function makeEpub(book: { title: string; author: string; id: string; color?: string; meta?: Record<string, unknown> }, nodes: ReadNode[]): Uint8Array {
   // 부는 혼자 한 쪽, 장 · 장면은 장 단위로 묶어 한 파일
   const chapters: { id: string; title: string; level: number; html: string }[] = [];
   let lastKind = '';
@@ -54,6 +55,8 @@ export function makeEpub(book: { title: string; author: string; id: string }, no
     'META-INF/container.xml': strToU8(`<?xml version="1.0" encoding="utf-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`),
     'OEBPS/style.css': strToU8(CSS),
+    'OEBPS/cover.svg': strToU8(coverSvg({ title: book.title, author: book.author, color: book.color, id: book.id, style: book.meta?.coverStyle as CoverStyle | undefined })),
+    'OEBPS/cover.xhtml': strToU8(page(book.title, `<div style="text-align:center;margin:0"><img src="cover.svg" alt="${esc(book.title)} 표지" style="max-width:100%;max-height:100vh"/></div>`)),
     'OEBPS/title.xhtml': strToU8(page(book.title, `<div class="title"><h1>${esc(book.title)}</h1>${book.author ? `<p>${esc(book.author)}</p>` : ''}</div>`)),
     'OEBPS/nav.xhtml': strToU8(
       page(
@@ -81,9 +84,12 @@ ${book.author ? `<dc:creator>${esc(book.author)}</dc:creator>` : ''}
 <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
 <item id="css" href="style.css" media-type="text/css"/>
 <item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>
+<item id="cover-image" href="cover.svg" media-type="image/svg+xml" properties="cover-image"/>
+<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
 ${chapters.map((c) => `<item id="${c.id}" href="${c.id}.xhtml" media-type="application/xhtml+xml"/>`).join('\n')}
 </manifest>
 <spine toc="ncx">
+<itemref idref="cover"/>
 <itemref idref="title"/>
 ${chapters.map((c) => `<itemref idref="${c.id}"/>`).join('\n')}
 </spine>

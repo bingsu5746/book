@@ -3,6 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api } from '../../lib/api';
 import { findAnchor, highlightRange, makeAnchor, rangeOffsets, type Anchor } from '../../lib/anchor';
 import { idb, local } from '../../lib/idb';
+import { loadWorld, toRefs } from '../../lib/world';
+import type { EntryRef } from '../studio/Editor';
 import { renderMd } from '../../lib/md';
 import { go } from '../../lib/router';
 import { useSession } from '../../lib/session';
@@ -49,6 +51,13 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
   const [scope, setScope] = useState<'all' | 'open'>('open');
   const [rating, setRating] = useState(false);
   const [pageMode, setPageMode] = useState(false);
+  const [entries, setEntries] = useState<EntryRef[]>([]);
+  useEffect(() => {
+    if (!d?.book.world_id) return;
+    loadWorld(d.book.world_id)
+      .then((w) => setEntries(toRefs(w.items)))
+      .catch(() => {});
+  }, [d?.book.world_id]);
   const prefs = loadPrefs();
   const col = useRef<HTMLDivElement>(null);
   const sc = useRef<HTMLDivElement>(null);
@@ -216,6 +225,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
         nodes={d.nodes}
         progressKey={`e:${d.book.id}`}
         forceMode="page"
+        entries={entries}
         onExit={() => setPageMode(false)}
         actions={[{ label: '주석 보며 읽기 (스크롤)', icon: 'comment', onClick: () => setPageMode(false) }]}
       />

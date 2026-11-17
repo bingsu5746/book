@@ -171,6 +171,9 @@ export class Library extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS images (id TEXT PRIMARY KEY, world_id TEXT NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, size INTEGER NOT NULL, created INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS images_world ON images (world_id);
       CREATE TABLE IF NOT EXISTS read_daily (user_id TEXT NOT NULL, day TEXT NOT NULL, secs INTEGER NOT NULL, PRIMARY KEY (user_id, day));
+      CREATE TABLE IF NOT EXISTS write_daily (user_id TEXT NOT NULL, day TEXT NOT NULL, secs INTEGER NOT NULL, PRIMARY KEY (user_id, day));
+      CREATE TABLE IF NOT EXISTS jots (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS jots_user ON jots (user_id);
     `);
     // 책갈피 종류: mark(책갈피) · line(밑줄). 예전 표에는 칸이 없다
     try {
@@ -265,7 +268,35 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('INSERT OR REPLACE INTO prefs (user_id, data) VALUES (?, ?)', user.id, jsonText(b.prefs, 50_000));
       return json({ ok: true });
     }
-    if (path === 'stats' && method === 'GET') return json({ days: this.rows('SELECT day, chars FROM daily WHERE user_id = ? ORDER BY day DESC LIMIT 400', user.id), read: this.rows('SELECT day, secs FROM read_daily WHERE user_id = ? ORDER BY day DESC LIMIT 400', user.id) });
+    if (path === 'stats' && method === 'GET') return json({ days: this.rows('SELECT day, chars FROM daily WHERE user_id = ? ORDER BY day DESC LIMIT 400', user.id), read: this.rows('SELECT day, secs FROM read_daily WHERE user_id = ? ORDER BY day DESC LIMIT 400', user.id), write: this.rows('SELECT day, secs FROM write_daily WHERE user_id = ? ORDER BY day DESC LIMIT 400', user.id) });
+    if (path === 'stats/write' && method === 'POST') {
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(String(b.day ?? '')) ? String(b.day) : new Date().toISOString().slice(0, 10);
+      const secs = Math.max(0, Math.min(3600, Math.floor(num(b.secs))));
+      if (secs) this.sql.exec('INSERT INTO write_daily (user_id, day, secs) VALUES (?, ?, ?) ON CONFLICT (user_id, day) DO UPDATE SET secs = secs + excluded.secs', user.id, day, secs);
+      return json({ ok: true });
+    }
+    // 아이디어 수첩
+    if (path === 'jots' && method === 'GET') return json({ jots: this.rows('SELECT id, text, done, created, updated FROM jots WHERE user_id = ? ORDER BY done, updated DESC LIMIT 1000', user.id) });
+    if (path === 'jots' && method === 'POST') {
+      const text = str(b.text, 20_000).trim();
+      if (!text) return fail('적은 내용이 없어요.');
+      if (Number(this.one('SELECT COUNT(*) AS n FROM jots WHERE user_id = ?', user.id)?.n ?? 0) >= 2000) return fail('수첩이 가득 찼어요. 다 쓴 메모를 지워 주세요.', 413);
+      const id = newId();
+      const now = Date.now();
+      this.sql.exec('INSERT INTO jots (id, user_id, text, created, updated) VALUES (?, ?, ?, ?, ?)', id, user.id, text, now, now);
+      return json({ jot: { id, text, done: 0, created: now, updated: now } });
+    }
+    if ((r = m(/^jots\/([a-z0-9]+)$/))) {
+      if (method === 'PATCH') {
+        if ('text' in b) this.sql.exec('UPDATE jots SET text = ?, updated = ? WHERE id = ? AND user_id = ?', str(b.text, 20_000), Date.now(), r[1], user.id);
+        if ('done' in b) this.sql.exec('UPDATE jots SET done = ?, updated = ? WHERE id = ? AND user_id = ?', b.done ? 1 : 0, Date.now(), r[1], user.id);
+        return json({ ok: true });
+      }
+      if (method === 'DELETE') {
+        this.sql.exec('DELETE FROM jots WHERE id = ? AND user_id = ?', r[1], user.id);
+        return json({ ok: true });
+      }
+    }
     if (path === 'stats/read' && method === 'POST') {
       const day = /^\d{4}-\d{2}-\d{2}$/.test(String(b.day ?? '')) ? String(b.day) : new Date().toISOString().slice(0, 10);
       const secs = Math.max(0, Math.min(3600, Math.floor(num(b.secs))));
@@ -292,6 +323,7 @@ export class Library extends DurableObject<Env> {
     if ((r = m(/^books\/([a-z0-9]+)\/annotations$/)) && method === 'GET') return this.annotationsFor(user, r[1]);
     if ((r = m(/^books\/([a-z0-9]+)\/rating$/)) && method === 'PUT') return this.rate(user, r[1], b);
     if ((r = m(/^books\/([a-z0-9]+)\/snapshots$/)) && method === 'GET') return this.bookSnapshots(user, r[1]);
+    if ((r = m(/^books\/([a-z0-9]+)\/readers$/)) && method === 'GET') return this.readers(user, r[1]);
 
     if ((r = m(/^nodes\/([a-z0-9]+)$/))) {
       if (method === 'GET') return this.getNode(user, r[1]);
@@ -466,7 +498,7 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('DELETE FROM images WHERE world_id = ?', w.id);
       this.sql.exec('DELETE FROM worlds WHERE id = ?', w.id);
     }
-    for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'read_daily', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
+    for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'read_daily', 'write_daily', 'jots', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
     this.sql.exec('UPDATE annotations SET deleted = ?, body = ? WHERE author = ?', Date.now(), '', user.id);
     this.sql.exec('DELETE FROM users WHERE id = ?', user.id);
     return json({ ok: true }, 200, { 'set-cookie': clearCookie() });
@@ -477,7 +509,7 @@ export class Library extends DurableObject<Env> {
     const nodes = ids.flatMap((id) => this.rows('SELECT * FROM nodes WHERE book_id = ?', id));
     const worlds = this.rows('SELECT * FROM worlds WHERE owner = ?', user.id);
     const witems = worlds.flatMap((w) => this.rows('SELECT * FROM witems WHERE world_id = ?', String(w.id)));
-    return json({ exported: Date.now(), user: this.publicUser(user), books, nodes, worlds, witems, progress: this.rows('SELECT * FROM progress WHERE user_id = ?', user.id), bookmarks: this.rows('SELECT * FROM bookmarks WHERE user_id = ?', user.id), daily: this.rows('SELECT * FROM daily WHERE user_id = ?', user.id) });
+    return json({ exported: Date.now(), user: this.publicUser(user), books, nodes, worlds, witems, progress: this.rows('SELECT * FROM progress WHERE user_id = ?', user.id), jots: this.rows('SELECT text, done, created FROM jots WHERE user_id = ?', user.id), bookmarks: this.rows('SELECT * FROM bookmarks WHERE user_id = ?', user.id), daily: this.rows('SELECT * FROM daily WHERE user_id = ?', user.id) });
   }
 
   // ---------------------------------------------------------------- 책
@@ -969,6 +1001,18 @@ export class Library extends DurableObject<Env> {
     this.ownBook(user, bookId);
     this.sql.exec('UPDATE books SET shared = 0 WHERE id = ?', bookId);
     return json({ ok: true });
+  }
+  /** 작가에게: 친구가 공유본을 어디까지 읽었나 */
+  private readers(user: UserRow, bookId: string) {
+    this.ownBook(user, bookId);
+    const rows = this.rows<{ user_id: string; data: string; at: number; nickname: string }>('SELECT p.user_id, p.data, p.at, u.nickname FROM progress p JOIN users u ON u.id = p.user_id WHERE p.key = ? AND p.user_id != ? ORDER BY p.at DESC', `e:${bookId}`, user.id);
+    const titles = new Map(this.rows<{ node_id: string; title: string }>('SELECT DISTINCT en.node_id, en.title FROM edition_nodes en JOIN editions e ON e.id = en.edition_id WHERE e.book_id = ?', bookId).map((x) => [x.node_id, x.title]));
+    return json({
+      readers: rows.map((r) => {
+        const d = parseJson(r.data) as { n?: string; f?: number };
+        return { nickname: r.nickname, at: r.at, f: typeof d.f === 'number' ? d.f : 0, node_title: (d.n && titles.get(d.n)) || '' };
+      }),
+    });
   }
   private bookEditions(user: UserRow, bookId: string) {
     this.ownBook(user, bookId);

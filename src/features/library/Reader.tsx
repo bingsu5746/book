@@ -8,6 +8,7 @@ import type { ReadNode } from '../../lib/types';
 import { Icon, promptBox, toast } from '../../lib/ui';
 import { highlightRange, rangeOffsets } from '../../lib/anchor';
 import { speak, speakSupported, stopSpeaking } from '../studio/StudioTools';
+import type { EntryRef } from '../studio/Editor';
 
 export interface ReaderPrefs {
   fs: number;
@@ -22,9 +23,11 @@ export interface ReaderPrefs {
   autoHide: boolean;
   /** 쪽 여백 */
   margin: 'narrow' | 'normal' | 'wide';
+  /** 세계관 이름에 점선 · 누르면 요약 */
+  links: boolean;
 }
 const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-const DEFAULT: ReaderPrefs = { fs: 17, lh: 1.85, font: 'serif', theme: 'paper', mode: 'page', spread: 'auto', turn: reduced ? 'none' : 'curl', autoHide: true, margin: 'normal' };
+const DEFAULT: ReaderPrefs = { fs: 17, lh: 1.85, font: 'serif', theme: 'paper', mode: 'page', spread: 'auto', turn: reduced ? 'none' : 'curl', autoHide: true, margin: 'normal', links: true };
 
 export interface ReaderAction {
   label: string;
@@ -58,6 +61,8 @@ export function Reader({
   onExit,
   extraButtons,
   actions = [],
+  entries,
+  onFinish,
   forceMode,
   initialFind,
 }: {
@@ -69,6 +74,10 @@ export function Reader({
   extraButtons?: React.ReactNode;
   /** ⋯ 메뉴에 더할 일 */
   actions?: ReaderAction[];
+  /** 이 책의 세계관 항목 (있으면 이름을 누를 수 있다) */
+  entries?: EntryRef[];
+  /** 끝까지 읽었을 때 */
+  onFinish?: () => void;
   forceMode?: 'page' | 'scroll';
   initialFind?: string;
 }) {
@@ -92,7 +101,17 @@ export function Reader({
   const [n2, setN2] = useState(2);
   const spot = useRef<Spot | null>(start ?? null);
   const order = useMemo(() => nodes.map((n) => n.id), [nodes]);
-  const blocks = useMemo(() => buildBlocks(nodes), [nodes]);
+  const showLinks = prefs.links && !!entries?.length;
+  const blocks = useMemo(() => buildBlocks(nodes, { links: showLinks, names: showLinks ? entries!.flatMap((e) => [e.name, ...e.aliases]) : [] }), [nodes, showLinks, entries]);
+  const [wl, setWl] = useState<{ x: number; y: number; e: EntryRef | null; name: string } | null>(null);
+  const openLink = (t: HTMLElement) => {
+    const el = t.closest<HTMLElement>('.wl');
+    if (!el) return false;
+    const name = el.dataset.entry ?? '';
+    const r = el.getBoundingClientRect();
+    setWl({ x: r.left + r.width / 2, y: r.bottom, name, e: entries?.find((x) => x.name === name || x.aliases.includes(name)) ?? null });
+    return true;
+  };
   const [marks, setMarks] = useState<Bookmark[]>([]);
   const [find, setFind] = useState(initialFind ?? '');
   const [markTab, setMarkTab] = useState<'mark' | 'line'>('mark');
@@ -167,6 +186,8 @@ export function Reader({
   }, [progressKey, start]);
 
   const saveTimer = useRef<number>(0);
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
   const remember = useCallback(
     (s: Spot, done = false) => {
       spot.current = s;
@@ -174,6 +195,7 @@ export function Reader({
       const total = order.length;
       const frac = done ? 1 : Math.max(0, order.indexOf(s.n)) / Math.max(1, total);
       const data = { n: s.n, o: s.o, f: Math.round(frac * 1000) / 1000 };
+      if (done) onFinishRef.current?.();
       const at = Date.now();
       local.set(`prog:${progressKey}`, { ...data, at });
       clearTimeout(saveTimer.current);
@@ -529,6 +551,8 @@ export function Reader({
   };
   const onPageClick = (e: React.MouseEvent, j: number) => {
     if (dragged.current) return (dragged.current = false);
+    if (openLink(e.target as HTMLElement)) return;
+    if (wl) return setWl(null);
     if (String(getSelection()).length || (e.target as HTMLElement).closest('a')) return;
     if (pop) return setPop('');
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -696,6 +720,19 @@ export function Reader({
               ))}
             </div>
           </div>
+          {!!entries?.length && (
+            <div className="opt">
+              세계관 이름
+              <div className="seg">
+                <button className={prefs.links ? 'on' : ''} onClick={() => setPrefs({ links: true })}>
+                  누르면 요약
+                </button>
+                <button className={!prefs.links ? 'on' : ''} onClick={() => setPrefs({ links: false })}>
+                  그냥 글
+                </button>
+              </div>
+            </div>
+          )}
           <div className="opt">
             여백
             <div className="seg">
@@ -841,6 +878,19 @@ export function Reader({
         </div>
       )}
 
+      {wl && (
+        <div className="wl-pop" style={{ left: Math.min(Math.max(wl.x, 150), innerWidth - 150), top: wl.y + 8 }} role="dialog" aria-label={wl.name}>
+          <b>{wl.e?.name ?? wl.name}</b>
+          {wl.e ? (
+            <>
+              <span className="tiny" style={{ color: 'var(--rmuted)' }}>{wl.e.type}</span>
+              {wl.e.summary && <p>{wl.e.summary}</p>}
+            </>
+          ) : (
+            <p className="tiny">세계관에 아직 없는 이름이에요.</p>
+          )}
+        </div>
+      )}
       {selPop && (
         <div className="sel-pop" style={{ left: selPop.x, top: selPop.y }}>
           <button onMouseDown={(e) => e.preventDefault()} onClick={() => addLine(false)}>
@@ -919,7 +969,7 @@ export function Reader({
           <div className="r-measure prose" ref={measureRef} aria-hidden="true" />
         </>
       ) : (
-        <div className="r-scroll" ref={scrollRef} onClick={() => setPop('')} onMouseUp={readSelection} onTouchEnd={readSelection}>
+        <div className="r-scroll" ref={scrollRef} onClick={(e) => (openLink(e.target as HTMLElement) ? undefined : (setPop(''), setWl(null)))} onMouseUp={readSelection} onTouchEnd={readSelection}>
           <div className="col prose" />
         </div>
       )}

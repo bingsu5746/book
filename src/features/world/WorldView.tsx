@@ -7,7 +7,8 @@ import { renderMd } from '../../lib/md';
 import { go } from '../../lib/router';
 import { fmtNum } from '../../lib/text';
 import { confirmBox, Empty, Icon, Modal, promptBox, Spinner, SubNav, toast } from '../../lib/ui';
-import { DEFAULT_FIELDS, deleteItems, entriesOf, fieldsFor, KINDS, kindLabel, loadWorld, newItemId, REL_CATS, relColor, saveItems, type Entry, type EntryKind, type RelCat, type Relation, type Template, type Track, type WEvent, type WItem, type WorldData, parseBulk } from '../../lib/world';
+import { DEFAULT_FIELDS, deleteItems, entriesOf, fieldsFor, KINDS, kindLabel, loadWorld, newItemId, REL_CATS, relColor, saveItems, type Entry, type EntryKind, type RelCat, type Relation, type Template, type Track, type WEvent, type WItem, type WorldData, parseBulk, toRefs } from '../../lib/world';
+import { Editor } from '../studio/Editor';
 import { shrinkImage } from '../../lib/image';
 import { WorldMaps } from './WorldMaps';
 
@@ -281,6 +282,7 @@ function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry:
     put(v);
   };
   const entries = entriesOf(items);
+  const refs = useMemo(() => toRefs(items), [items]);
   const fields = fieldsFor(items, e.kind);
   const extra = Object.keys(e.fields).filter((k) => !fields.includes(k));
   const rels = items.filter((i): i is Relation => i.type === 'relation' && (i.a === e.id || i.b === e.id));
@@ -530,7 +532,15 @@ function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry:
             dangerouslySetInnerHTML={{ __html: bodyHtml || '<p class="muted">비어 있어요</p>' }}
           />
         ) : (
-          <textarea className="input serif" rows={12} value={e.body} placeholder="자유롭게 써요. [[다른 항목]] 처럼 쓰면 그 항목과 이어져요." onChange={(x) => upd({ body: x.target.value })} />
+          <>
+          <div className="entry-editor">
+            <Editor doc={e.body} entries={refs} focusMode={false} typewriterMode={false} dialogueTint={false} nameComplete onChange={(d) => upd({ body: d })} onLinkClick={(n) => {
+              const t = entries.find((y) => y.name === n || y.aliases.includes(n));
+              if (t) go(`worlds/${worldId}/entries/${t.id}`);
+            }} />
+          </div>
+          <p className="faint tiny">[[ 를 치면 다른 항목 이름을 고를 수 있어요. Ctrl/⌘ + 클릭으로 그 항목을 열어요.</p>
+          </>
         )}
       </div>
       <div className="panel stack">

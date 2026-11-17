@@ -50,6 +50,9 @@ export function Account() {
           <a className="btn" href="#/lines">
             밑줄 모음
           </a>
+          <a className="btn" href="#/jots">
+            수첩
+          </a>
         </div>
       </div>
       <div className="stack" style={{ maxWidth: 560 }}>
@@ -116,6 +119,7 @@ export function Account() {
                 try {
                   const r = await api('me/export');
                   download(`서재-백업-${today()}.json`, JSON.stringify(r, null, 1), 'application/json');
+                  local.set('lastBackup', Date.now());
                 } catch (e) {
                   toast((e as Error).message, 'err');
                 }

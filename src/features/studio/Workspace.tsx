@@ -15,6 +15,8 @@ import { Editor, type EditorHandle } from './Editor';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
 import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
+import { dictationSupported, startDictation } from '../../lib/dictate';
+import { JotPicker } from '../Jots';
 
 type View = 'write' | 'cork' | 'outline' | 'threads' | 'replace' | 'stats' | 'notes' | 'settings';
 const VIEWS: View[] = ['write', 'cork', 'outline', 'threads', 'replace', 'stats', 'notes', 'settings'];
@@ -30,8 +32,9 @@ interface WsPrefs {
   width: number;
   sideTab: SideTab;
   names: boolean;
+  quotes: boolean;
 }
-const DEFAULT_PREFS: WsPrefs = { binder: true, side: true, focus: false, typewriter: false, dialogue: false, fs: 17, width: 44, sideTab: 'info', names: true };
+const DEFAULT_PREFS: WsPrefs = { binder: true, side: true, focus: false, typewriter: false, dialogue: false, fs: 17, width: 44, sideTab: 'info', names: true, quotes: false };
 
 export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string }) {
   const [data, setData] = useState<FullBook | null>(null);
@@ -41,6 +44,31 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const [speaking, setSpeaking] = useState(false);
   const [bubble, setBubble] = useState<{ x: number; y: number } | null>(null);
   const [help, setHelp] = useState(false);
+  const [jotPick, setJotPick] = useState(false);
+  const [dictating, setDictating] = useState<{ stop: () => void; interim: string } | null>(null);
+  // 쓴 시간: 30초마다, 1분 안에 글을 고쳤으면 30초를 더한다 (2분마다 서버로)
+  const lastType = useRef(0);
+  useEffect(() => {
+    let buf = 0;
+    const flushW = () => {
+      if (!buf) return;
+      const secs = buf;
+      buf = 0;
+      void api('stats/write', { body: { day: new Date().toLocaleDateString('sv-SE'), secs } }).catch(() => {});
+    };
+    const tick = setInterval(() => {
+      if (document.visibilityState === 'visible' && Date.now() - lastType.current < 60_000) buf += 30;
+    }, 30_000);
+    const flush = setInterval(flushW, 120_000);
+    return () => {
+      clearInterval(tick);
+      clearInterval(flush);
+      flushW();
+    };
+  }, []);
+  const dictRef = useRef(dictating);
+  dictRef.current = dictating;
+  useEffect(() => () => dictRef.current?.stop(), []);
   useEffect(() => () => stopSpeaking(), []);
   const [prefs, setPrefsS] = useState<WsPrefs>(() => ({ ...DEFAULT_PREFS, ...local.get<Partial<WsPrefs>>('ws', {}) }));
   const setPrefs = (p: Partial<WsPrefs>) =>
@@ -118,6 +146,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
 
   const onBody = useCallback(
     (id: string, body: string) => {
+      lastType.current = Date.now();
       updateNode(id, { body, chars: charsNoSpace(body) });
       clearTimeout(timers.current.get(id));
       timers.current.set(
@@ -354,14 +383,36 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   <button onClick={() => (close(), editor.current?.insertLine('***'))}>장면 나눔 넣기</button>
                   <button onClick={() => (close(), editor.current?.find(''))}>이 장에서 찾기 · 바꾸기 (Ctrl+F)</button>
                   <button onClick={() => (close(), void splitHere())}>커서 자리에서 장 나누기</button>
+                  {dictationSupported() && (
+                    <button
+                      onClick={() => {
+                        close();
+                        if (dictating) return (dictating.stop(), setDictating(null));
+                        const stop = startDictation({
+                          onFinal: (t) => editor.current?.insertText(t),
+                          onInterim: (t) => setDictating((d) => (d ? { ...d, interim: t } : d)),
+                          onEnd: (err) => {
+                            setDictating(null);
+                            if (err) toast(err, 'err');
+                          },
+                        });
+                        setDictating({ stop, interim: '' });
+                        editor.current?.focus();
+                      }}
+                    >
+                      {dictating ? '받아쓰기 멈추기' : '받아쓰기 (말하면 글로)'}
+                    </button>
+                  )}
                   {speakSupported() && <button onClick={() => (close(), toggleSpeak())}>{speaking ? '듣기 멈추기' : '소리 내어 듣기 (커서부터)'}</button>}
                   <button onClick={() => (close(), openSpell())}>맞춤법 검사 (F7)</button>
+                  <button onClick={() => (close(), setJotPick(true))}>수첩에서 꺼내 넣기</button>
                   <hr />
                 </>
               )}
               <button onClick={() => (close(), setPrefs({ focus: !prefs.focus }))}>{prefs.focus ? '집중 모드 끄기' : '집중 모드 (지금 문단만)'}</button>
               <button onClick={() => (close(), setPrefs({ typewriter: !prefs.typewriter }))}>{prefs.typewriter ? '타자기 모드 끄기' : '타자기 모드 (쓰는 줄을 가운데)'}</button>
               <button onClick={() => (close(), setPrefs({ dialogue: !prefs.dialogue }))}>{prefs.dialogue ? '대사 색 끄기' : '대사에 옅은 색'}</button>
+              <button onClick={() => (close(), setPrefs({ quotes: !prefs.quotes }))}>{prefs.quotes ? '둥근 따옴표 자동 끄기' : '" 를 치면 둥근 따옴표 “ ” 로'}</button>
               <button onClick={() => (close(), setPrefs({ names: !prefs.names }))}>{prefs.names ? '세계관 이름 자동 완성 끄기' : '세계관 이름 자동 완성 켜기'}</button>
               <hr />
               <button onClick={() => (close(), setPrefs({ fs: Math.min(24, prefs.fs + 1) }))}>글자 크게 ({prefs.fs + 1})</button>
@@ -394,6 +445,16 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         )}
       </header>
 
+      {jotPick && (
+        <JotPicker
+          onClose={() => setJotPick(false)}
+          onPick={(j) => {
+            setJotPick(false);
+            editor.current?.insertLine(j.text);
+            void api(`jots/${j.id}`, { method: 'PATCH', body: { done: 1 } }).catch(() => {});
+          }}
+        />
+      )}
       {help && (
         <Modal title="단축키" onClose={() => setHelp(false)}>
           <dl className="kv" style={{ gridTemplateColumns: 'auto 1fr', fontSize: 14, gap: '8px 18px' }}>
@@ -406,6 +467,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
               ['Ctrl/⌘ + Z / Shift + Z', '되돌리기 / 다시'],
               ['F7', '맞춤법 검사'],
               ['Ctrl/⌘ + Shift + K', '빠른 이동 (책 · 장 · 항목)'],
+              ['Ctrl/⌘ + J', '아이디어 수첩에 바로 적기'],
               ['Ctrl/⌘ + 클릭', '[[링크]] 의 세계관 항목 열기'],
               ['Ctrl/⌘ + ?', '이 도움말'],
             ].map(([k, v]) => (
@@ -433,6 +495,15 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   맞춤법
                 </button>
               </div>
+              {dictating && (
+                <div className="dictate-pill" role="status">
+                  <span className="rec-dot" />
+                  <span className="grow ellipsis">{dictating.interim || '듣고 있어요… 말하면 커서 자리에 적혀요'}</span>
+                  <button className="small" onClick={() => (dictating.stop(), setDictating(null))}>
+                    멈추기
+                  </button>
+                </div>
+              )}
               {bubble && (
                 <div className="fmt-bubble" style={{ left: bubble.x, top: bubble.y }} onMouseDown={(e) => e.preventDefault()}>
                   <button onClick={() => editor.current?.wrap('**')} title="굵게 (Ctrl+B)">
@@ -464,6 +535,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                 typewriterMode={prefs.typewriter}
                 dialogueTint={prefs.dialogue}
                 nameComplete={prefs.names}
+                smartQuotes={prefs.quotes}
                 onLinkClick={(name) => {
                   const e = entriesOf(items).find((x) => x.name === name || x.aliases.includes(name));
                   if (e && book.world_id) go(`worlds/${book.world_id}/entries/${e.id}`);

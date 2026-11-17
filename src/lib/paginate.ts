@@ -19,7 +19,34 @@ export interface TocEntry {
 }
 
 /** 장들을 쪽에 넣을 덩어리(요소)로 */
-export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean } = {}): HTMLElement[] {
+/** 덩어리 안 글에서 이름이 처음 나오는 곳을 세계관 링크(span.wl)로 감싼다 (장마다 이름당 한 번) */
+function linkNames(el: HTMLElement, re: RegExp, seen: Set<string>) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  while (w.nextNode()) if (!(w.currentNode.parentElement?.closest('.wl'))) texts.push(w.currentNode as Text);
+  for (const t of texts) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    let node = t;
+    while ((m = re.exec(node.data))) {
+      if (seen.has(m[0])) continue;
+      seen.add(m[0]);
+      const mid = node.splitText(m.index);
+      const rest = mid.splitText(m[0].length);
+      const span = document.createElement('span');
+      span.className = 'wl';
+      span.dataset.entry = m[0];
+      mid.parentNode!.insertBefore(span, mid);
+      span.appendChild(mid);
+      node = rest;
+      re.lastIndex = 0;
+    }
+  }
+}
+
+export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean; names?: string[] } = {}): HTMLElement[] {
+  const names = (opts.names ?? []).filter((n) => n.trim().length >= 2).sort((a, b) => b.length - a.length);
+  const nameRe = names.length ? new RegExp(names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g') : null;
   const out: HTMLElement[] = [];
   let toc = 0;
   let lastKind = '';
@@ -47,6 +74,7 @@ export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean } = {}): 
     const wrap = document.createElement('div');
     wrap.innerHTML = renderMd(node.body, opts);
     let o = 0;
+    const seen = new Set<string>();
     for (const c of [...wrap.childNodes]) {
       let el: HTMLElement;
       if (c.nodeType === 3) {
@@ -57,6 +85,7 @@ export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean } = {}): 
       else continue;
       el.dataset.n = node.id;
       el.dataset.o = String(o);
+      if (nameRe && !/^H[1-6]$/.test(el.tagName)) linkNames(el, nameRe, seen);
       o += (el.textContent ?? '').length;
       out.push(el);
     }
