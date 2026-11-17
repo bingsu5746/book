@@ -7,14 +7,19 @@ import { renderMd } from '../../lib/md';
 import { go } from '../../lib/router';
 import { fmtNum } from '../../lib/text';
 import { confirmBox, Empty, Icon, Modal, promptBox, Spinner, SubNav, toast } from '../../lib/ui';
-import { DEFAULT_FIELDS, deleteItems, entriesOf, fieldsFor, KINDS, kindLabel, loadWorld, newItemId, saveItems, type Entry, type EntryKind, type Relation, type Template, type Track, type WEvent, type WItem, type WorldData } from '../../lib/world';
+import { DEFAULT_FIELDS, deleteItems, entriesOf, fieldsFor, KINDS, kindLabel, loadWorld, newItemId, REL_CATS, relColor, saveItems, type Entry, type EntryKind, type RelCat, type Relation, type Template, type Track, type WEvent, type WItem, type WorldData } from '../../lib/world';
+import { shrinkImage } from '../../lib/image';
+import { WorldMaps } from './WorldMaps';
 
-type Tab = 'entries' | 'graph' | 'timeline' | 'appear' | 'templates' | 'settings';
+/** 인물을 깊이 들여다보는 질문 (원하는 것만 채우고, 빈 칸은 지우면 된다) */
+const CHARACTER_QUESTIONS = ['가장 오래된 기억', '남에게 숨기는 것', '절대 하지 않을 일', '가장 아끼는 물건', '화가 날 때 하는 행동', '다른 인물이 보는 이 사람', '이야기 처음과 끝에서 달라지는 믿음'];
+
+type Tab = 'entries' | 'graph' | 'maps' | 'timeline' | 'appear' | 'templates' | 'settings';
 
 export function WorldView({ worldId, tab, entryId }: { worldId: string; tab?: string; entryId?: string }) {
   const [data, setData] = useState<WorldData | null>(null);
   const [err, setErr] = useState('');
-  const t: Tab = (['entries', 'graph', 'timeline', 'appear', 'templates', 'settings'] as Tab[]).includes(tab as Tab) ? (tab as Tab) : 'entries';
+  const t: Tab = (['entries', 'graph', 'maps', 'timeline', 'appear', 'templates', 'settings'] as Tab[]).includes(tab as Tab) ? (tab as Tab) : 'entries';
   useEffect(() => {
     loadWorld(worldId)
       .then(setData)
@@ -78,6 +83,7 @@ export function WorldView({ worldId, tab, entryId }: { worldId: string; tab?: st
           items={[
             { id: 'entries', label: '항목', icon: 'list', badge: entries.length },
             { id: 'graph', label: '관계도', icon: 'share' },
+            { id: 'maps', label: '지도', icon: 'compass' },
             { id: 'timeline', label: '연표', icon: 'clock' },
             ...(ro ? [] : [{ id: 'appear' as Tab, label: '등장 분포', icon: 'chart' }]),
             ...(ro ? [] : [{ id: 'templates' as Tab, label: '서식', icon: 'grid' }]),
@@ -85,10 +91,11 @@ export function WorldView({ worldId, tab, entryId }: { worldId: string; tab?: st
           ]}
         />
         <div style={{ minWidth: 0 }}>
-          {t === 'entries' && !open && <EntryList items={items} ro={ro} worldId={worldId} onCreate={(e) => (put(e, true), go(`worlds/${worldId}/entries/${e.id}`))} />}
-          {t === 'entries' && open && <EntryEditor key={open.id} entry={open} items={items} ro={ro} worldId={worldId} put={put} remove={remove} />}
+          {t === 'entries' && !open && <EntryList items={items} ro={ro} worldId={worldId} onCreate={(e, stay) => (put(e, true), !stay && go(`worlds/${worldId}/entries/${e.id}`))} />}
+          {t === 'entries' && open && <EntryEditor key={open.id} entry={open} items={items} ro={ro} worldId={worldId} put={put} remove={remove} books={data.books} />}
           {t === 'graph' && <Graph items={items} ro={ro} worldId={worldId} put={put} remove={remove} />}
-          {t === 'timeline' && <Timeline items={items} ro={ro} put={put} remove={remove} />}
+          {t === 'maps' && <WorldMaps worldId={worldId} items={items} ro={ro} put={put} remove={remove} />}
+          {t === 'timeline' && <Timeline items={items} ro={ro} put={put} remove={remove} books={data.books} />}
           {t === 'appear' && <Appear worldId={worldId} items={items} />}
           {t === 'templates' && <Templates items={items} put={put} />}
           {t === 'settings' && <WorldSettings data={data} onChange={(w) => setData({ ...data, world: { ...data.world, ...w } })} />}
@@ -99,7 +106,52 @@ export function WorldView({ worldId, tab, entryId }: { worldId: string; tab?: st
 }
 
 // ---------------------------------------------------------------- 항목 목록
-function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boolean; worldId: string; onCreate: (e: Entry) => void }) {
+function MissingLinks({ worldId, entries, onCreate }: { worldId: string; entries: Entry[]; onCreate: (e: Entry, stay?: boolean) => void }) {
+  const [links, setLinks] = useState<{ name: string; count: number; nodes: { node_id: string; book_id: string; node_title: string }[] }[] | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    api(`worlds/${worldId}/links`)
+      .then((r) => setLinks(r.links))
+      .catch(() => setLinks([]));
+  }, [worldId]);
+  const known = new Set(entries.flatMap((e) => [e.name, ...e.aliases]));
+  const missing = (links ?? []).filter((l) => !known.has(l.name));
+  if (!missing.length) return null;
+  return (
+    <div className="note-box">
+      <button className="ghost small" style={{ padding: 0 }} onClick={() => setOpen(!open)}>
+        원고에서 [[링크]]로 썼지만 세계관에 없는 이름 <b>{missing.length}개</b> {open ? '접기' : '보기'}
+      </button>
+      {open && (
+        <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+          {missing.map((l) => (
+            <div key={l.name} className="row wrap">
+              <b>{l.name}</b>
+              <span className="faint tiny">{l.count}번 · {l.nodes.map((n) => n.node_title).slice(0, 3).join(', ')}</span>
+              <span className="grow" />
+              <select
+                className="input"
+                style={{ width: 'auto', padding: '4px 8px', fontSize: 13 }}
+                value=""
+                aria-label={`${l.name} 항목 만들기`}
+                onChange={(e) => e.target.value && onCreate({ id: newItemId(), type: 'entry', kind: e.target.value as EntryKind, name: l.name, aliases: [], summary: '', body: '', fields: {}, tags: [], color: '' }, true)}
+              >
+                <option value="">+ 항목으로 만들기</option>
+                {KINDS.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boolean; worldId: string; onCreate: (e: Entry, stay?: boolean) => void }) {
   const [kind, setKind] = useState<EntryKind | ''>('');
   const [tag, setTag] = useState('');
   const [q, setQ] = useState('');
@@ -115,6 +167,7 @@ function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boole
   };
   return (
     <div className="stack" style={{ gap: 16 }}>
+      {!ro && <MissingLinks worldId={worldId} entries={entries} onCreate={onCreate} />}
       <div className="row wrap">
         <input className="input grow" style={{ minWidth: 180 }} placeholder="이름 · 내용으로 찾기" value={q} onChange={(e) => setQ(e.target.value)} />
         {!ro && (
@@ -150,6 +203,7 @@ function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boole
         <div className="entry-grid">
           {list.map((e) => (
             <a key={e.id} className="entry-card" href={`#/worlds/${worldId}/entries/${e.id}`} style={{ textDecoration: 'none' }}>
+              {e.image && <img className="entry-thumb" src={`/api/images/${e.image}`} alt="" loading="lazy" />}
               <span className="type-tag">{kindLabel(e.kind)}</span>
               <span className="n">
                 <span className="swatch-dot" style={{ ['--c' as string]: e.color || undefined }} />
@@ -168,8 +222,10 @@ function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boole
 }
 
 // ---------------------------------------------------------------- 항목 편집
-function EntryEditor({ entry, items, ro, worldId, put, remove }: { entry: Entry; items: WItem[]; ro: boolean; worldId: string; put: (i: WItem, now?: boolean) => void; remove: (ids: string[]) => void }) {
+function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry: Entry; items: WItem[]; ro: boolean; worldId: string; put: (i: WItem, now?: boolean) => void; remove: (ids: string[]) => void; books: { id: string; title: string }[] }) {
   const [e, setE] = useState(entry);
+  const [origName] = useState(entry.name);
+  const [imgBusy, setImgBusy] = useState(false);
   const [preview, setPreview] = useState(ro);
   const [mentions, setMentions] = useState<{ node_id: string; book_id: string; book_title: string; node_title: string; count: number }[] | null>(null);
   const upd = (p: Partial<Entry>) => {
@@ -215,10 +271,66 @@ function EntryEditor({ entry, items, ro, worldId, put, remove }: { entry: Entry;
         )}
       </div>
       <div className="panel stack">
+        <div className="row" style={{ gap: 14, alignItems: 'flex-start' }}>
+          {e.image ? (
+            <img className="portrait" src={`/api/images/${e.image}`} alt={`${e.name} 그림`} />
+          ) : (
+            !ro && (
+              <label className="portrait empty" title="그림 올리기">
+                <Icon name="upload" />
+                <span className="tiny">{imgBusy ? '올리는 중' : '그림'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  disabled={imgBusy}
+                  onChange={async (x) => {
+                    const f = x.target.files?.[0];
+                    if (!f) return;
+                    setImgBusy(true);
+                    try {
+                      const img = await shrinkImage(f, 700);
+                      const r = await api<{ id: string }>(`worlds/${worldId}/images`, { body: { mime: img.mime, data: img.data } });
+                      upd({ image: r.id });
+                    } catch (err) {
+                      toast((err as Error).message, 'err');
+                    } finally {
+                      setImgBusy(false);
+                    }
+                  }}
+                />
+              </label>
+            )
+          )}
+          <div className="grow stack" style={{ gap: 6 }}>
+            {e.image && !ro && (
+              <button
+                className="small ghost"
+                style={{ alignSelf: 'flex-start' }}
+                onClick={async () => {
+                  await api(`images/${e.image}`, { method: 'DELETE' }).catch(() => {});
+                  upd({ image: undefined });
+                }}
+              >
+                그림 빼기
+              </button>
+            )}
+          </div>
+        </div>
         <div className="row wrap" style={{ gap: 12 }}>
           <label className="field grow">
             이름
             <input className="input serif" style={{ fontSize: 20, fontWeight: 600 }} value={e.name} disabled={ro} onChange={(x) => upd({ name: x.target.value })} />
+            {!ro && origName && e.name.trim() && e.name.trim() !== origName && !!books.length && (
+              <span className="tiny">
+                원고 속 「{origName}」도 바꿀까요?{' '}
+                {books.map((b) => (
+                  <a key={b.id} href={`#/write/${b.id}?view=replace&from=${encodeURIComponent(origName)}&to=${encodeURIComponent(e.name.trim())}`} style={{ marginRight: 8 }}>
+                    「{b.title}」에서 바꾸기
+                  </a>
+                ))}
+              </span>
+            )}
           </label>
           <label className="field">
             종류
@@ -314,6 +426,19 @@ function EntryEditor({ entry, items, ro, worldId, put, remove }: { entry: Entry;
             >
               <Icon name="plus" size={14} />칸 더하기
             </button>
+            {e.kind === 'character' && (
+              <button
+                className="small ghost"
+                title="인물을 더 깊이 알기 위한 질문 칸을 이 인물에 더해요"
+                onClick={() => {
+                  const fs = { ...e.fields };
+                  for (const q of CHARACTER_QUESTIONS) if (!(q in fs)) fs[q] = '';
+                  upd({ fields: fs });
+                }}
+              >
+                질문지 더하기
+              </button>
+            )}
             <span className="faint tiny" style={{ marginLeft: 8 }}>
               모든 {kindLabel(e.kind)}의 칸은 「서식」에서 바꿔요
             </span>
@@ -357,6 +482,7 @@ function EntryEditor({ entry, items, ro, worldId, put, remove }: { entry: Entry;
             const other = r.a === e.id ? r.b : r.a;
             return (
               <div key={r.id} className="list-item">
+                <span className="swatch-dot" style={{ ['--c' as string]: relColor(r.cat) }} title={REL_CATS.find((c) => c.id === r.cat)?.label} />
                 <span className="grow">
                   {r.a === e.id ? (
                     <>
@@ -439,19 +565,27 @@ function EntryEditor({ entry, items, ro, worldId, put, remove }: { entry: Entry;
 function AddRelation({ from, entries, onAdd }: { from: Entry; entries: Entry[]; onAdd: (r: Relation) => void }) {
   const [to, setTo] = useState('');
   const [label, setLabel] = useState('');
+  const [cat, setCat] = useState<RelCat>('other');
   return (
     <form
       className="row wrap"
       onSubmit={(x) => {
         x.preventDefault();
         if (!to) return;
-        onAdd({ id: newItemId(), type: 'relation', a: from.id, b: to, label: label.trim(), note: '' });
+        onAdd({ id: newItemId(), type: 'relation', a: from.id, b: to, label: label.trim(), note: '', cat });
         setTo('');
         setLabel('');
       }}
     >
       <span className="small">{from.name} →</span>
       <input className="input" style={{ width: 140 }} placeholder="관계 (예: 엄마, 적)" value={label} onChange={(x) => setLabel(x.target.value)} />
+      <select className="input" style={{ width: 'auto' }} value={cat} onChange={(x) => setCat(x.target.value as RelCat)} aria-label="관계 종류">
+        {REL_CATS.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.label}
+          </option>
+        ))}
+      </select>
       <span className="small">→</span>
       <select className="input" style={{ width: 'auto', minWidth: 140 }} value={to} onChange={(x) => setTo(x.target.value)} aria-label="이어질 항목">
         <option value="">항목 고르기</option>
@@ -477,10 +611,11 @@ function Graph({ items, ro, worldId, put, remove }: { items: WItem[]; ro: boolea
   const [kinds, setKinds] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<string | null>(null);
   const [onlyLinked, setOnlyLinked] = useState(false);
+  const [cats, setCats] = useState<Set<string>>(new Set());
   const linked = new Set(rels.flatMap((r) => [r.a, r.b]));
   const shown = entries.filter((e) => (!kinds.size || kinds.has(e.kind)) && (!onlyLinked || linked.has(e.id)));
   const ids = new Set(shown.map((e) => e.id));
-  const edges = rels.filter((r) => ids.has(r.a) && ids.has(r.b));
+  const edges = rels.filter((r) => ids.has(r.a) && ids.has(r.b) && (!cats.size || cats.has(r.cat ?? 'other')));
   const W = 900;
   const H = 620;
   const pos = useRef(new Map<string, { x: number; y: number; vx: number; vy: number }>());
@@ -572,6 +707,26 @@ function Graph({ items, ro, worldId, put, remove }: { items: WItem[]; ro: boolea
         </label>
         <span className="faint tiny">점을 끌어 옮기고, 눌러서 골라요.</span>
       </div>
+      <div className="row wrap">
+        <span className="muted tiny">관계 종류</span>
+        {REL_CATS.filter((c) => rels.some((r) => (r.cat ?? 'other') === c.id)).map((c) => (
+          <button
+            key={c.id}
+            className={`chip${cats.has(c.id) ? ' on' : ''}`}
+            onClick={() =>
+              setCats((s) => {
+                const x = new Set(s);
+                if (x.has(c.id)) x.delete(c.id);
+                else x.add(c.id);
+                return x;
+              })
+            }
+          >
+            <span className="swatch-dot" style={{ ['--c' as string]: c.color }} />
+            {c.label}
+          </button>
+        ))}
+      </div>
       <svg
         ref={svg}
         className="graph"
@@ -594,7 +749,7 @@ function Graph({ items, ro, worldId, put, remove }: { items: WItem[]; ro: boolea
           if (!a || !b) return null;
           return (
             <g key={r.id}>
-              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} style={sel && (r.a === sel || r.b === sel) ? { stroke: 'var(--accent)', strokeWidth: 2 } : undefined} />
+              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} style={{ stroke: relColor(r.cat), strokeWidth: sel && (r.a === sel || r.b === sel) ? 2.6 : 1.4, opacity: sel && r.a !== sel && r.b !== sel ? 0.35 : 0.9 }} />
               {r.label && (
                 <text className="edge-label" x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 4} textAnchor="middle">
                   {r.label}
@@ -649,7 +804,14 @@ function Graph({ items, ro, worldId, put, remove }: { items: WItem[]; ro: boolea
                 <span className="grow">
                   {entries.find((x) => x.id === r.a)?.name} → <b>{r.label || '관계'}</b> → {entries.find((x) => x.id === r.b)?.name}
                 </span>
-                <input className="input" style={{ width: 160 }} defaultValue={r.label} aria-label="관계 이름" onBlur={(ev) => ev.target.value !== r.label && put({ ...r, label: ev.target.value })} />
+                <input className="input" style={{ width: 140 }} defaultValue={r.label} aria-label="관계 이름" onBlur={(ev) => ev.target.value !== r.label && put({ ...r, label: ev.target.value })} />
+                <select className="input" style={{ width: 'auto' }} value={r.cat ?? 'other'} aria-label="관계 종류" onChange={(ev) => put({ ...r, cat: ev.target.value as RelCat }, true)}>
+                  {REL_CATS.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
                 <button className="icon-btn" aria-label="지우기" onClick={() => remove([r.id])}>
                   <Icon name="close" size={14} />
                 </button>
@@ -663,7 +825,28 @@ function Graph({ items, ro, worldId, put, remove }: { items: WItem[]; ro: boolea
 }
 
 // ---------------------------------------------------------------- 연표 (여러 줄)
-function Timeline({ items, ro, put, remove }: { items: WItem[]; ro: boolean; put: (i: WItem, now?: boolean) => void; remove: (ids: string[]) => void }) {
+function useChapters(books: { id: string; title: string }[]) {
+  const [list, setList] = useState<{ id: string; title: string; book: string; book_id: string }[]>([]);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const out: { id: string; title: string; book: string; book_id: string }[] = [];
+      for (const b of books) {
+        const t = await api(`books/${b.id}`).catch(() => null);
+        if (!t) continue;
+        for (const n of flatten((t.nodes as { id: string; parent_id: string | null; sort: number; kind: string; title: string; deleted: number | null }[]).filter((x) => !x.deleted && x.kind !== 'part' && x.kind !== 'note'))) out.push({ id: n.id, title: n.title, book: b.title, book_id: b.id });
+      }
+      if (live) setList(out);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [books.map((b) => b.id).join()]); // eslint-disable-line react-hooks/exhaustive-deps
+  return list;
+}
+
+function Timeline({ items, ro, put, remove, books }: { items: WItem[]; ro: boolean; put: (i: WItem, now?: boolean) => void; remove: (ids: string[]) => void; books: { id: string; title: string }[] }) {
+  const chapters = useChapters(ro ? [] : books);
   const tracks = items.filter((i): i is Track => i.type === 'track').sort((a, b) => a.sort - b.sort);
   const events = items.filter((i): i is WEvent => i.type === 'event');
   const entries = entriesOf(items);
@@ -794,6 +977,40 @@ function Timeline({ items, ro, put, remove }: { items: WItem[]; ro: boolean; put
             내용
             <textarea className="input" rows={4} disabled={ro} value={edit.body} onChange={(e) => setEdit({ ...edit, body: e.target.value })} />
           </label>
+          {!!chapters.length && (
+            <label className="field">
+              이 사건이 나오는 장
+              <select
+                className="input"
+                disabled={ro}
+                value=""
+                onChange={(e) => e.target.value && !edit.nodes.includes(e.target.value) && setEdit({ ...edit, nodes: [...edit.nodes, e.target.value] })}
+              >
+                <option value="">장 더하기</option>
+                {chapters.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {books.length > 1 ? `${c.book} · ` : ''}
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+              <span className="row wrap">
+                {edit.nodes.map((id) => {
+                  const c = chapters.find((x) => x.id === id);
+                  return (
+                    <span key={id} className="chip on">
+                      {c ? <a href={`#/write/${c.book_id}/${c.id}`}>{c.title}</a> : '(지운 장)'}
+                      {!ro && (
+                        <button className="icon-btn" style={{ padding: 0 }} aria-label="장 빼기" onClick={() => setEdit({ ...edit, nodes: edit.nodes.filter((x) => x !== id) })}>
+                          <Icon name="close" size={12} />
+                        </button>
+                      )}
+                    </span>
+                  );
+                })}
+              </span>
+            </label>
+          )}
           <div className="field">
             관련 항목
             <div className="row wrap">

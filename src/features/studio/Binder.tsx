@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import { flatten } from '../../lib/store';
 import { fmtNum } from '../../lib/text';
-import { KIND_LABEL, type BookNode, type NodeKind } from '../../lib/types';
+import { KIND_LABEL, STATUS_LABEL, type BookNode, type NodeKind } from '../../lib/types';
 import { Icon, Menu } from '../../lib/ui';
 
 export interface BinderActions {
@@ -10,6 +10,7 @@ export interface BinderActions {
   rename: (n: BookNode) => void;
   remove: (n: BookNode) => void;
   duplicate: (n: BookNode) => void;
+  merge: (n: BookNode) => void;
   move: (id: string, parent: string | null, sort: number) => void;
   restore: (n: BookNode) => void;
 }
@@ -21,6 +22,13 @@ export function Binder({ nodes, sel, onSelect, act }: { nodes: BookNode[]; sel: 
   const [drag, setDrag] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ id: string; where: 'before' | 'after' | 'in' } | null>(null);
   const [showTrash, setShowTrash] = useState(false);
+  const [filter, setFilter] = useState('');
+  const matches = (n: BookNode) => {
+    const f = filter.trim();
+    if (!f) return true;
+    if (f.startsWith('#')) return (n.meta.tags ?? []).some((t) => t.includes(f.slice(1)));
+    return [n.title, n.synopsis, n.meta.pov ?? '', n.meta.place ?? '', STATUS_LABEL[n.status]].some((x) => x.includes(f));
+  };
   const trash = nodes.filter((n) => n.deleted);
   const kids = (id: string) => live.filter((n) => n.parent_id === id).sort((a, b) => a.sort - b.sort);
   const hasKids = (id: string) => live.some((n) => n.parent_id === id);
@@ -98,8 +106,9 @@ export function Binder({ nodes, sel, onSelect, act }: { nodes: BookNode[]; sel: 
           )}
         </Menu>
       </div>
+      <input className="input" style={{ fontSize: 13, padding: '6px 9px', marginBottom: 6 }} placeholder="거르기: 제목 · 시점 · 상태 · #꼬리표" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="원고 목록 거르기" />
       {flat.map((n) => {
-        if (isHidden(n)) return null;
+        if (filter ? !matches(n) && n.kind !== 'part' : isHidden(n)) return null;
         const k = hasKids(n.id);
         return (
           <div
@@ -154,7 +163,7 @@ export function Binder({ nodes, sel, onSelect, act }: { nodes: BookNode[]; sel: 
             </span>
             {n.kind !== 'part' && <span className={`dot ${n.status}`} style={n.label ? { background: n.label } : undefined} />}
             <span className="t">{n.title || (n.kind === 'note' ? '메모' : `제목 없는 ${KIND_LABEL[n.kind]}`)}</span>
-            {n.kind !== 'part' && <span className="c">{n.chars ? fmtNum(n.chars) : ''}</span>}
+            {n.kind !== 'part' && <span className="c" style={Number(n.meta.target) && n.chars >= Number(n.meta.target) ? { color: 'var(--accent)' } : undefined}>{n.chars ? fmtNum(n.chars) : ''}{Number(n.meta.target) ? `/${fmtNum(Number(n.meta.target))}` : ''}</span>}
             <span onClick={(e) => e.stopPropagation()}>
               <Menu label={`${n.title} 메뉴`}>
                 {(close) => (
@@ -176,6 +185,7 @@ export function Binder({ nodes, sel, onSelect, act }: { nodes: BookNode[]; sel: 
                       </button>
                     )}
                     <button onClick={() => (close(), act.duplicate(n))}>복제</button>
+                    {n.kind !== 'part' && <button onClick={() => (close(), act.merge(n))}>아래 칸과 합치기</button>}
                     <hr />
                     <button className="danger" onClick={() => (close(), act.remove(n))}>
                       휴지통에 넣기

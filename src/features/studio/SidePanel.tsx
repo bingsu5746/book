@@ -5,7 +5,7 @@ import { analyze } from '../../lib/analyze';
 import { ago, fmtDate, fmtNum } from '../../lib/text';
 import { STATUS_LABEL, type BookNode, type Status } from '../../lib/types';
 import { confirmBox, Icon, Modal, promptBox, Spinner, toast } from '../../lib/ui';
-import { entriesOf, fieldsFor, kindLabel, mentionedIn, type Entry, type WItem } from '../../lib/world';
+import { entriesOf, fieldsFor, kindLabel, mentionedIn, type Entry, type WEvent, type WItem } from '../../lib/world';
 import type { EditorHandle } from './Editor';
 
 export type SideTab = 'info' | 'world' | 'history' | 'revise' | 'notes';
@@ -56,7 +56,7 @@ export function SidePanel({
       <div className="side-body">
         {!node && <p className="muted small">왼쪽에서 장을 골라 주세요.</p>}
         {node && tab === 'info' && <Info node={node} items={items} onPatch={onPatch} />}
-        {node && tab === 'world' && <WorldTab worldId={worldId} items={items} body={body} editor={editor} onOpenWorld={onOpenWorld} />}
+        {node && tab === 'world' && <WorldTab worldId={worldId} items={items} body={body} editor={editor} onOpenWorld={onOpenWorld} nodeId={node.id} />}
         {node && tab === 'history' && <History node={node} body={body} onRestore={onRestore} />}
         {node && tab === 'revise' && <Revise body={body} editor={editor} />}
         {node && tab === 'notes' && <FriendNotes bookId={bookId} node={node} body={body} editor={editor} />}
@@ -99,6 +99,10 @@ function Info({ node, items, onPatch }: { node: BookNode; items: WItem[]; onPatc
           ))}
         </div>
       </div>
+      <label className="field">
+        이 칸 목표 글자 (공백 제외)
+        <input className="input" type="number" min={0} step={500} defaultValue={Number(node.meta.target) || ''} key={`tg2${node.id}`} onBlur={(e) => +e.target.value !== (Number(node.meta.target) || 0) && meta('target', +e.target.value || 0)} />
+      </label>
       <label className="field">
         시점 인물
         <input className="input" list="dl-people" defaultValue={node.meta.pov ?? ''} key={`pov${node.id}`} onBlur={(e) => e.target.value !== (node.meta.pov ?? '') && meta('pov', e.target.value)} />
@@ -145,11 +149,12 @@ function Info({ node, items, onPatch }: { node: BookNode; items: WItem[]; onPatc
   );
 }
 
-function WorldTab({ worldId, items, body, editor, onOpenWorld }: { worldId: string | null; items: WItem[]; body: string; editor: React.RefObject<EditorHandle | null>; onOpenWorld: () => void }) {
+function WorldTab({ worldId, items, body, editor, onOpenWorld, nodeId }: { worldId: string | null; items: WItem[]; body: string; editor: React.RefObject<EditorHandle | null>; onOpenWorld: () => void; nodeId: string }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Entry | null>(null);
   const entries = entriesOf(items);
   const here = useMemo(() => mentionedIn(body, entries), [body, entries]);
+  const events = items.filter((i): i is WEvent => i.type === 'event' && i.nodes.includes(nodeId));
   if (!worldId)
     return (
       <div className="stack">
@@ -201,6 +206,19 @@ function WorldTab({ worldId, items, body, editor, onOpenWorld }: { worldId: stri
   return (
     <>
       <input className="input" placeholder="항목 찾기" value={q} onChange={(e) => setQ(e.target.value)} />
+      {!q && !!events.length && (
+        <div>
+          <h4>이 장의 사건 (연표)</h4>
+          <div className="stack" style={{ gap: 4, marginTop: 6 }}>
+            {events.map((v) => (
+              <a key={v.id} className="small" href={`#/worlds/${worldId}/timeline`}>
+                {v.when ? `${v.when} · ` : ''}
+                {v.title}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
       {!q && (
         <div>
           <h4>이 장에 나오는 항목</h4>

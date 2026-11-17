@@ -36,6 +36,8 @@ export interface Entry {
   fields: Record<string, string>;
   tags: string[];
   color: string;
+  /** 초상 · 대표 그림 (images 표의 id) */
+  image?: string;
   updated?: number;
 }
 export interface Relation {
@@ -45,7 +47,18 @@ export interface Relation {
   b: string;
   label: string;
   note: string;
+  cat?: RelCat;
 }
+export type RelCat = 'family' | 'love' | 'friend' | 'enemy' | 'member' | 'other';
+export const REL_CATS: { id: RelCat; label: string; color: string }[] = [
+  { id: 'family', label: '가족', color: '#3f8a6c' },
+  { id: 'love', label: '연인 · 애정', color: '#c2577a' },
+  { id: 'friend', label: '친구 · 동료', color: '#4f6fa8' },
+  { id: 'enemy', label: '적 · 갈등', color: '#c26b4a' },
+  { id: 'member', label: '소속 · 위아래', color: '#8a5ca8' },
+  { id: 'other', label: '기타', color: '#9a958a' },
+];
+export const relColor = (c?: string) => REL_CATS.find((x) => x.id === c)?.color ?? REL_CATS[5].color;
 export interface Track {
   id: string;
   type: 'track';
@@ -70,7 +83,24 @@ export interface Template {
   kind: EntryKind;
   fields: string[];
 }
-export type WItem = Entry | Relation | Track | WEvent | Template;
+export interface MapPin {
+  id: string;
+  x: number;
+  y: number;
+  entry: string;
+  label: string;
+}
+export interface MapItem {
+  id: string;
+  type: 'map';
+  name: string;
+  image: string;
+  w: number;
+  h: number;
+  pins: MapPin[];
+  note: string;
+}
+export type WItem = Entry | Relation | Track | WEvent | Template | MapItem;
 
 export interface World {
   id: string;
@@ -95,6 +125,7 @@ export async function loadWorld(id: string): Promise<WorldData> {
   r.items = r.items.map((i) => {
     const raw = i as unknown as Record<string, unknown>;
     if (i.type === 'entry') return { ...{ kind: 'other', name: '', aliases: [], summary: '', body: '', fields: {}, tags: [], color: '' }, ...raw } as unknown as Entry;
+    if (i.type === 'map') return { ...{ name: '', image: '', w: 1, h: 1, pins: [], note: '' }, ...raw } as unknown as MapItem;
     if (i.type === 'event') return { ...{ title: '', track: '', when: '', order: 0, body: '', entries: [], nodes: [] }, ...raw } as unknown as WEvent;
     return i;
   });

@@ -78,3 +78,15 @@ describe('퇴고 도우미', () => {
     expect(a.sentenceCount).toBe(4);
   });
 });
+
+import { findAll, replaceAll } from './replace';
+describe('책 전체 찾아 바꾸기', () => {
+  it('글 그대로 찾아 바꾼다 (정규식 기호도 글자로)', () => {
+    expect(replaceAll('홍설은 홍설이다. a.b', '홍설', '설이', { regex: false, ignoreCase: false })).toBe('설이은 설이이다. a.b');
+    expect(findAll('a.b axb', 'a.b', { regex: false, ignoreCase: false })).toHaveLength(1);
+  });
+  it('정규식 · 대소문자 무시', () => {
+    expect(replaceAll('Cat cat', 'c(a)t', 'd$1g', { regex: true, ignoreCase: true })).toBe('dag dag');
+    expect(findAll('x', '(', { regex: true, ignoreCase: false })).toEqual([]);
+  });
+});

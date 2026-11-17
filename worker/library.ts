@@ -112,7 +112,11 @@ class HttpError extends Error {
 const NODE_KINDS = new Set(['part', 'chapter', 'scene', 'note']);
 const BOOK_KINDS = new Set(['write', 'read']);
 const STATUSES = new Set(['', 'idea', 'draft', 'revise', 'done']);
-const WITEM_TYPES = new Set(['entry', 'relation', 'track', 'event', 'template', 'note']);
+const WITEM_TYPES = new Set(['entry', 'relation', 'track', 'event', 'template', 'note', 'map', 'thread']);
+/** 그림(지도 · 초상) 한 장 최대 크기(base64 글자) · 세계마다 최대 장 수 */
+const MAX_IMAGE = 1_400_000;
+const MAX_IMAGES = 80;
+const IMAGE_TYPES = new Set(['image/webp', 'image/jpeg', 'image/png']);
 
 export class Library extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -164,6 +168,8 @@ export class Library extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS bookmarks_user ON bookmarks (user_id, key);
       CREATE TABLE IF NOT EXISTS daily (user_id TEXT NOT NULL, day TEXT NOT NULL, chars INTEGER NOT NULL, PRIMARY KEY (user_id, day));
       CREATE TABLE IF NOT EXISTS prefs (user_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS images (id TEXT PRIMARY KEY, world_id TEXT NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, size INTEGER NOT NULL, created INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS images_world ON images (world_id);
     `);
   }
 
@@ -324,6 +330,12 @@ export class Library extends DurableObject<Env> {
     }
     if ((r = m(/^worlds\/([a-z0-9]+)\/items$/)) && method === 'POST') return this.putItems(user, r[1], b);
     if ((r = m(/^worlds\/([a-z0-9]+)\/mentions$/)) && method === 'POST') return this.mentions(user, r[1], b);
+    if ((r = m(/^worlds\/([a-z0-9]+)\/links$/)) && method === 'GET') return this.links(user, r[1]);
+    if ((r = m(/^worlds\/([a-z0-9]+)\/images$/)) && method === 'POST') return this.putImage(user, r[1], b);
+    if ((r = m(/^images\/([a-z0-9]+)$/))) {
+      if (method === 'GET') return this.getImage(user, r[1]);
+      if (method === 'DELETE') return this.deleteImage(user, r[1]);
+    }
 
     // 열람실
     if (path === 'community' && method === 'GET') return this.community(user);
@@ -434,6 +446,7 @@ export class Library extends DurableObject<Env> {
     for (const id of books) this.purgeBookData(id);
     for (const w of this.rows<{ id: string }>('SELECT id FROM worlds WHERE owner = ?', user.id)) {
       this.sql.exec('DELETE FROM witems WHERE world_id = ?', w.id);
+      this.sql.exec('DELETE FROM images WHERE world_id = ?', w.id);
       this.sql.exec('DELETE FROM worlds WHERE id = ?', w.id);
     }
     for (const t of ['sessions', 'progress', 'bookmarks', 'daily', 'prefs', 'ratings', 'likes']) this.sql.exec(`DELETE FROM ${t} WHERE user_id = ?`, user.id);
@@ -866,6 +879,58 @@ export class Library extends DurableObject<Env> {
       }
     }
     return json({ mentions: out });
+  }
+
+  /** 원고 속 [[이름]] 을 모두 모은다 (세계관에 아직 없는 이름을 찾을 때) */
+  private links(user: UserRow, worldId: string) {
+    this.ownWorld(user, worldId);
+    const nodes = this.rows<NodeRow & { book_title: string }>(
+      `SELECT n.id, n.book_id, n.title, n.body, b.title AS book_title FROM nodes n JOIN books b ON b.id = n.book_id WHERE b.owner = ? AND b.world_id = ? AND b.deleted IS NULL AND n.deleted IS NULL`,
+      user.id,
+      worldId,
+    );
+    const found = new Map<string, { name: string; count: number; nodes: { node_id: string; book_id: string; node_title: string }[] }>();
+    for (const n of nodes)
+      for (const m of n.body.matchAll(/\[\[([^\]|\n]+)(?:\|[^\]\n]+)?\]\]/g)) {
+        const name = m[1].trim();
+        if (!name) continue;
+        const f = found.get(name) ?? { name, count: 0, nodes: [] };
+        f.count++;
+        if (!f.nodes.some((x) => x.node_id === n.id)) f.nodes.push({ node_id: n.id, book_id: n.book_id, node_title: n.title });
+        found.set(name, f);
+      }
+    return json({ links: [...found.values()].sort((a, b) => b.count - a.count) });
+  }
+  private putImage(user: UserRow, worldId: string, b: Body) {
+    this.ownWorld(user, worldId);
+    const mime = String(b.mime ?? '');
+    const data = String(b.data ?? '');
+    if (!IMAGE_TYPES.has(mime) || !/^[A-Za-z0-9+/=]+$/.test(data)) return fail('그림 파일이 아니에요.');
+    if (data.length > MAX_IMAGE) return fail('그림이 너무 커요.', 413);
+    const n = Number(this.one('SELECT COUNT(*) AS n FROM images WHERE world_id = ?', worldId)?.n ?? 0);
+    if (n >= MAX_IMAGES) return fail(`한 세계에 그림은 ${MAX_IMAGES}장까지예요. 안 쓰는 그림을 지워 주세요.`, 413);
+    const id = newId();
+    this.sql.exec('INSERT INTO images (id, world_id, mime, data, size, created) VALUES (?, ?, ?, ?, ?, ?)', id, worldId, mime, data, data.length, Date.now());
+    return json({ id });
+  }
+  private imageAccess(user: UserRow, id: string) {
+    const img = this.one('SELECT i.*, w.owner AS owner FROM images i JOIN worlds w ON w.id = i.world_id WHERE i.id = ?', id);
+    if (!img) return null;
+    const mine = img.owner === user.id;
+    if (!mine && !this.one('SELECT id FROM books WHERE world_id = ? AND shared = 1 AND share_world = 1 AND deleted IS NULL', String(img.world_id))) return null;
+    return { img, mine };
+  }
+  private getImage(user: UserRow, id: string) {
+    const a = this.imageAccess(user, id);
+    if (!a) return fail('그림을 찾을 수 없어요.', 404);
+    const bin = Uint8Array.from(atob(String(a.img.data)), (c) => c.charCodeAt(0));
+    return new Response(bin, { headers: { 'content-type': String(a.img.mime), 'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
+  }
+  private deleteImage(user: UserRow, id: string) {
+    const a = this.imageAccess(user, id);
+    if (!a || !a.mine) return fail('그림을 찾을 수 없어요.', 404);
+    this.sql.exec('DELETE FROM images WHERE id = ?', id);
+    return json({ ok: true });
   }
 
   // ---------------------------------------------------------------- 열람실

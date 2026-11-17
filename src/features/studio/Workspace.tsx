@@ -13,8 +13,10 @@ import { Binder, type BinderActions } from './Binder';
 import { Editor, type EditorHandle } from './Editor';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
+import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
 
-type View = 'write' | 'cork' | 'outline' | 'stats' | 'notes' | 'settings';
+type View = 'write' | 'cork' | 'outline' | 'threads' | 'replace' | 'stats' | 'notes' | 'settings';
+const VIEWS: View[] = ['write', 'cork', 'outline', 'threads', 'replace', 'stats', 'notes', 'settings'];
 interface WsPrefs {
   binder: boolean;
   side: boolean;
@@ -30,7 +32,10 @@ const DEFAULT_PREFS: WsPrefs = { binder: true, side: true, focus: false, typewri
 export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string }) {
   const [data, setData] = useState<FullBook | null>(null);
   const [err, setErr] = useState('');
-  const [view, setView] = useState<View>('write');
+  const q0 = useMemo(() => new URLSearchParams(location.hash.split('?')[1] ?? ''), []);
+  const [view, setView] = useState<View>(() => (VIEWS.includes(q0.get('view') as View) ? (q0.get('view') as View) : 'write'));
+  const [speaking, setSpeaking] = useState(false);
+  useEffect(() => () => stopSpeaking(), []);
   const [prefs, setPrefsS] = useState<WsPrefs>(() => ({ ...DEFAULT_PREFS, ...local.get<Partial<WsPrefs>>('ws', {}) }));
   const setPrefs = (p: Partial<WsPrefs>) =>
     setPrefsS((o) => {
@@ -185,6 +190,20 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
       revs.current.set(c.id, 1);
       setData((d) => (d ? { ...d, nodes: [...d.nodes, { ...n, id: c.id, sort: c.sort, title: `${n.title} 사본`, rev: 1 }] } : d));
     },
+    merge: async (n) => {
+      const sib = live.filter((x) => x.parent_id === n.parent_id && x.kind !== 'part').sort((a, b) => a.sort - b.sort);
+      const next = sib[sib.findIndex((x) => x.id === n.id) + 1];
+      if (!next) return toast('아래에 합칠 칸이 없어요.', 'err');
+      if (live.some((x) => x.parent_id === next.id)) return toast('아래 칸 안에 장면이 있어서 합칠 수 없어요. 장면을 먼저 옮겨 주세요.', 'err');
+      if (!(await confirmBox(`「${n.title}」에 「${next.title}」을(를) 합칠까요?`, { ok: '합치기', detail: '아래 칸의 글을 이어 붙이고, 아래 칸은 휴지통에 넣어요. 합치기 전 글은 기록에 남아요.' }))) return;
+      await api(`nodes/${n.id}/snapshots`, { body: { label: '합치기 전' } }).catch(() => {});
+      const merged = `${(n.body ?? '').replace(/\s+$/, '')}\n\n***\n\n${(next.body ?? '').replace(/^\s+/, '')}`;
+      onBody(n.id, merged);
+      await api(`nodes/${next.id}`, { method: 'DELETE' }).catch(() => {});
+      setData((d) => (d ? { ...d, nodes: d.nodes.map((x) => (x.id === next.id ? { ...x, deleted: Date.now() } : x)) } : d));
+      setEdKey((k) => k + 1);
+      select(n.id);
+    },
     move: async (id, parent, sort) => {
       updateNode(id, { parent_id: parent, sort });
       try {
@@ -250,6 +269,8 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
           <option value="cork">코르크보드</option>
           <option value="outline">개요</option>
           <option value="stats">통계</option>
+          <option value="threads">플롯 선</option>
+          <option value="replace">찾아 바꾸기</option>
           <option value="notes">작가 노트</option>
           <option value="settings">책 설정</option>
         </select>
@@ -259,6 +280,8 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
               ['write', '원고', 'pen'],
               ['cork', '코르크보드', 'grid'],
               ['outline', '개요', 'layers'],
+              ['threads', '플롯 선', 'share'],
+              ['replace', '찾아 바꾸기', 'search'],
               ['stats', '통계', 'chart'],
               ['notes', '작가 노트', 'note'],
               ['settings', '책 설정', 'settings'],
@@ -335,9 +358,59 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                 <button className="tb" onClick={() => editor.current?.wrap('%%', '%%')} title="작가 메모 (Ctrl+/) — 리더에는 안 보여요">
                   %% 메모
                 </button>
-                <button className="tb" onClick={() => editor.current?.find('')} title="찾기 · 바꾸기 (Ctrl+F)">
+                <button className="tb" onClick={() => editor.current?.find('')} title="이 장에서 찾기 · 바꾸기 (Ctrl+F). 책 전체는 위의 「찾아 바꾸기」">
                   찾기 · 바꾸기
                 </button>
+                <button
+                  className="tb"
+                  title="커서 자리에서 장을 둘로 나눠요"
+                  onClick={async () => {
+                    const v = editor.current?.view;
+                    if (!v || !sel) return;
+                    const at = v.state.selection.main.head;
+                    const before = v.state.doc.sliceString(0, at).replace(/\s+$/, '');
+                    const after = v.state.doc.sliceString(at).replace(/^\s+/, '');
+                    if (!after) return toast('커서 뒤에 글이 없어요. 나눌 곳에 커서를 두세요.', 'err');
+                    const title = await promptBox('새로 나뉠 칸의 이름', `${sel.title} (2)`);
+                    if (title == null) return;
+                    try {
+                      const sib = live.filter((x) => x.parent_id === sel.parent_id).sort((a, b) => a.sort - b.sort);
+                      const next = sib[sib.findIndex((x) => x.id === sel.id) + 1];
+                      const sort = next ? (sel.sort + next.sort) / 2 : sel.sort + 1;
+                      const r = await api<{ created: { id: string; sort: number }[] }>(`books/${bookId}/nodes`, { body: { items: [{ kind: sel.kind, title, parent_id: sel.parent_id, sort, body: after, meta: { pov: sel.meta.pov, place: sel.meta.place } }] } });
+                      const c = r.created[0];
+                      revs.current.set(c.id, 1);
+                      const nn: BookNode = { ...sel, id: c.id, sort: c.sort, title, body: after, chars: charsNoSpace(after), synopsis: '', rev: 1, updated: Date.now(), deleted: null };
+                      setData((d) => (d ? { ...d, nodes: [...d.nodes, nn] } : d));
+                      onBody(sel.id, before);
+                      setEdKey((k) => k + 1);
+                      toast('장을 나눴어요');
+                    } catch (e) {
+                      toast((e as Error).message, 'err');
+                    }
+                  }}
+                >
+                  ⫽ 여기서 나누기
+                </button>
+                {speakSupported() && (
+                  <button
+                    className="tb"
+                    title="소리 내어 들으며 퇴고해요 (커서부터, 기기의 읽어 주기 목소리)"
+                    onClick={() => {
+                      if (speaking) {
+                        stopSpeaking();
+                        setSpeaking(false);
+                        return;
+                      }
+                      const v = editor.current?.view;
+                      const from = v ? v.state.selection.main.head : 0;
+                      setSpeaking(true);
+                      speak(plain(body.slice(from)), () => setSpeaking(false));
+                    }}
+                  >
+                    {speaking ? '■ 듣기 멈춤' : '▷ 소리 내어 듣기'}
+                  </button>
+                )}
               </div>
               <Editor
                 key={`${sel.id}:${edKey}`}
@@ -359,6 +432,11 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                 <span>
                   이 {KIND_LABEL[sel.kind]} {fmtNum(charsNoSpace(body))}자 (공백 포함 {fmtNum(charsWithSpace(plain(body)))}) · 원고지 약 {fmtNum(manuscriptPages(body))}매
                 </span>
+                {!!Number(sel.meta.target) && (
+                  <span style={{ color: charsNoSpace(body) >= Number(sel.meta.target) ? 'var(--accent)' : undefined }}>
+                    목표 {Math.min(100, Math.round((charsNoSpace(body) / Number(sel.meta.target)) * 100))}%
+                  </span>
+                )}
                 {selChars > 0 && <span>고른 글 {fmtNum(selChars)}자</span>}
                 <span>책 전체 {fmtNum(total)}자</span>
                 {written !== 0 && <span>이번에 {written > 0 ? '+' : ''}{fmtNum(written)}자</span>}
@@ -376,6 +454,22 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
           ))}
         {view === 'cork' && <Corkboard nodes={live} onOpen={select} onMove={act.move} onAdd={(k, p) => act.add(k, p)} />}
         {view === 'outline' && <Outline nodes={live} onOpen={select} onPatch={patchNode} />}
+        {view === 'threads' && <PlotThreads book={book} nodes={live} onPatchBook={patchBook} onPatchNode={patchNode} onOpen={select} />}
+        {view === 'replace' && (
+          <FindReplace
+            nodes={live}
+            initialFrom={q0.get('from') ?? ''}
+            initialTo={q0.get('to') ?? ''}
+            onReplace={(id, b) => {
+              onBody(id, b);
+              setEdKey((k) => k + 1);
+            }}
+            onOpen={(id, f) => {
+              select(id);
+              if (f) setTimeout(() => editor.current?.find(f), 250);
+            }}
+          />
+        )}
         {view === 'stats' && <BookStats book={book} nodes={live} onPatchBook={patchBook} />}
         {view === 'notes' && <BookNotes book={book} entries={refs} onSave={(notes) => patchBook({ notes })} />}
         {view === 'settings' && (

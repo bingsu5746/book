@@ -13,11 +13,14 @@ export const setUnauthorizedHandler = (fn: () => void) => (onUnauthorized = fn);
 
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   let res: Response;
+  const method = opts.method ?? (opts.body !== undefined ? 'POST' : 'GET');
+  // 바꾸는 요청은 서버가 JSON 만 받는다 (본문이 없는 지우기 요청도)
+  const body = opts.body !== undefined ? opts.body : method !== 'GET' && method !== 'HEAD' ? {} : undefined;
   try {
     res = await fetch(`/api/${path}`, {
-      method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
-      headers: opts.body !== undefined ? { 'content-type': 'application/json' } : undefined,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      method,
+      headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       credentials: 'same-origin',
       signal: opts.signal,
     });
