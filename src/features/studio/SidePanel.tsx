@@ -118,6 +118,8 @@ function Info({ node, items, onPatch, summarize }: { node: BookNode; items: WIte
           ))}
         </select>
       </label>
+      <details className="more">
+        <summary>세부 정보 · 색 · 목표 · 시점 · 장소 · 메모</summary>
       <div className="field">
         색 표시
         <div className="row">
@@ -161,6 +163,7 @@ function Info({ node, items, onPatch, summarize }: { node: BookNode; items: WIte
         장 메모 (나만 보는 곳)
         <textarea className="input" rows={6} value={memo} onChange={(e) => setMemo(e.target.value)} onBlur={() => memo !== (node.meta.notes ?? '') && meta('notes', memo)} />
       </label>
+      </details>
       <datalist id="dl-people">
         {people.map((p) => (
           <option key={p.id} value={p.name} />

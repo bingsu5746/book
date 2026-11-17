@@ -15,13 +15,15 @@ import { Editor, type EditorHandle } from './Editor';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
 import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
+import { PlanView } from './PlanView';
+import { beatAt } from '../../lib/beats';
 import { dictationSupported, startDictation } from '../../lib/dictate';
 import { JotPicker } from '../Jots';
 
-type View = 'write' | 'cork' | 'outline' | 'threads' | 'replace' | 'stats' | 'notes' | 'settings';
-const VIEWS: View[] = ['write', 'cork', 'outline', 'threads', 'replace', 'stats', 'notes', 'settings'];
-const VIEW_LABEL: Record<View, string> = { write: '원고', cork: '코르크보드', outline: '개요', threads: '플롯 선', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
-const VIEW_ICON: Record<View, string> = { write: 'pen', cork: 'grid', outline: 'layers', threads: 'share', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
+type View = 'plan' | 'write' | 'cork' | 'outline' | 'threads' | 'replace' | 'stats' | 'notes' | 'settings';
+const VIEWS: View[] = ['plan', 'write', 'cork', 'outline', 'threads', 'replace', 'stats', 'notes', 'settings'];
+const VIEW_LABEL: Record<View, string> = { plan: '구상 (줄거리 먼저)', write: '원고', cork: '코르크보드', outline: '개요', threads: '플롯 선', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
+const VIEW_ICON: Record<View, string> = { plan: 'note', write: 'pen', cork: 'grid', outline: 'layers', threads: 'share', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
 interface WsPrefs {
   binder: boolean;
   side: boolean;
@@ -45,6 +47,11 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const [bubble, setBubble] = useState<{ x: number; y: number } | null>(null);
   const [help, setHelp] = useState(false);
   const [jotPick, setJotPick] = useState(false);
+  const [curBeat, setCurBeat] = useState<{ text: string; index: number; total: number } | null>(null);
+  const openAt = (id: string, pos?: number) => {
+    select(id);
+    if (pos != null) setTimeout(() => editor.current?.select(pos, pos), 260);
+  };
   const [dictating, setDictating] = useState<{ stop: () => void; interim: string } | null>(null);
   // 쓴 시간: 30초마다, 1분 안에 글을 고쳤으면 30초를 더한다 (2분마다 서버로)
   const lastType = useRef(0);
@@ -198,7 +205,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         const n: BookNode = { id: c.id, book_id: bookId, parent_id: c.parent_id, kind, sort: c.sort, title, body: '', synopsis: '', status: '', label: '', meta: {}, chars: 0, rev: 1, updated: Date.now(), deleted: null };
         revs.current.set(n.id, 1);
         setData((d) => (d ? { ...d, nodes: [...d.nodes, n] } : d));
-        if (kind !== 'part') select(n.id);
+        if (kind !== 'part' && view !== 'plan') select(n.id);
       } catch (e) {
         toast((e as Error).message, 'err');
       }
@@ -291,6 +298,13 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
     void summarize(n).catch(() => {});
   }, [sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 아직 아무것도 안 쓴 책은 「구상」부터
+  const planChecked = useRef(false);
+  useEffect(() => {
+    if (!data || planChecked.current) return;
+    planChecked.current = true;
+    if (!q0.get('view') && !data.nodes.some((n) => !n.deleted && (n.body ?? '').trim())) setView('plan');
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
   // 쓰던 장을 기억해 두었다가 다음에 그 장으로 연다
   useEffect(() => {
     if (sel) local.set(`lastNode:${bookId}`, sel.id);
@@ -403,6 +417,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             <>
               {view === 'write' && sel && (
                 <>
+                  <button onClick={() => (close(), editor.current?.insertBeat())}>쪽 줄거리 넣기 (Ctrl/⌘ + Enter)</button>
                   <button onClick={() => (close(), editor.current?.insertLine('***'))}>장면 나눔 넣기</button>
                   <button onClick={() => (close(), editor.current?.find(''))}>이 장에서 찾기 · 바꾸기 (Ctrl+F)</button>
                   <button onClick={() => (close(), void splitHere())}>커서 자리에서 장 나누기</button>
@@ -513,6 +528,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
               ['F7', '맞춤법 검사'],
               ['Ctrl/⌘ + Shift + K', '빠른 이동 (책 · 장 · 항목)'],
               ['Ctrl/⌘ + J', '아이디어 수첩에 바로 적기'],
+              ['Ctrl/⌘ + Enter', '커서 자리에 쪽 줄거리 넣기 (이 쪽에서 쓸 내용)'],
               ['Ctrl/⌘ + 클릭', '[[링크]] 의 세계관 항목 열기'],
               ['Ctrl/⌘ + ?', '이 도움말'],
             ].map(([k, v]) => (
@@ -575,6 +591,10 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                 onChange={(d) => onBody(sel.id, d)}
                 onSelection={setSelChars}
                 onSelectRect={setBubble}
+                onCursor={(pos, doc) => {
+                  const b = beatAt(doc, pos);
+                  setCurBeat((old) => (b ? (old && old.text === b.beat.text && old.index === b.index && old.total === b.total ? old : { text: b.beat.text, index: b.index, total: b.total }) : null));
+                }}
                 entries={refs}
                 focusMode={prefs.focus}
                 typewriterMode={prefs.typewriter}
@@ -587,6 +607,14 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   else void createEntry(name);
                 }}
               />
+              {curBeat && (
+                <div className="beat-now" title="지금 쓰고 있는 쪽 줄거리">
+                  <span className="faint">
+                    쪽 {curBeat.index + 1}/{curBeat.total}
+                  </span>
+                  <span className="ellipsis">{curBeat.text || '(비어 있음)'}</span>
+                </div>
+              )}
               <footer className="ed-foot">
                 <span>
                   이 {KIND_LABEL[sel.kind]} {fmtNum(charsNoSpace(body))}자 (공백 포함 {fmtNum(charsWithSpace(plain(body)))}) · 원고지 약 {fmtNum(manuscriptPages(body))}매
@@ -612,6 +640,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             </div>
           ))}
         {view === 'cork' && <Corkboard nodes={live} onOpen={select} onMove={act.move} onAdd={(k, p) => act.add(k, p)} />}
+        {view === 'plan' && <PlanView book={book} nodes={live} onPatchBook={patchBook} onPatchNode={patchNode} onBody={onBody} onOpen={openAt} onAdd={(k, p) => act.add(k, p)} />}
         {view === 'outline' && <Outline nodes={live} onOpen={select} onPatch={patchNode} />}
         {view === 'threads' && <PlotThreads book={book} nodes={live} onPatchBook={patchBook} onPatchNode={patchNode} onOpen={select} />}
         {view === 'replace' && (

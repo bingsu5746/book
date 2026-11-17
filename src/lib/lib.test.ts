@@ -152,3 +152,39 @@ describe('글자 표지', () => {
     expect(s).not.toContain('<a & b>');
   });
 });
+
+import { addBeat, beatAt, beatWritten, moveBeat, parseBeats, removeBeat, renameBeat } from './beats';
+describe('쪽 줄거리', () => {
+  const doc = '머리글\n\n%%▸ 홍설이 깬다%%\n홍설은 꽃밭에서 눈을 떴다.\n\n%%▸ 봉오리를 본다%%\n\n%%▸ 엄마 생각%%\n엄마.';
+  it('표시 줄로 나누고, 다음 표시까지가 딸린 본문', () => {
+    const { pre, beats } = parseBeats(doc);
+    expect(pre).toBe('머리글\n\n');
+    expect(beats.map((b) => b.text)).toEqual(['홍설이 깬다', '봉오리를 본다', '엄마 생각']);
+    expect(beats[0].body).toBe('홍설은 꽃밭에서 눈을 떴다.\n\n');
+    expect(beats[1].body.trim()).toBe('');
+  });
+  it('커서가 있는 쪽 줄거리', () => {
+    expect(beatAt(doc, doc.indexOf('꽃밭'))?.beat.text).toBe('홍설이 깬다');
+    expect(beatAt(doc, 2)).toBeNull();
+  });
+  it('더하기 · 이름 바꾸기 · 빼기 (본문은 남는다)', () => {
+    expect(parseBeats(addBeat(doc, '새 쪽')).beats.at(-1)?.text).toBe('새 쪽');
+    expect(addBeat('', '첫 쪽')).toBe('%%▸ 첫 쪽%%\n');
+    const r = renameBeat(doc, 0, '깨어남');
+    expect(r).toContain('%%▸ 깨어남%%\n홍설은');
+    const rm = removeBeat(doc, 0);
+    expect(rm).toContain('머리글\n\n홍설은 꽃밭에서');
+    expect(parseBeats(rm).beats).toHaveLength(2);
+  });
+  it('옮기면 딸린 본문도 같이 간다', () => {
+    const m = moveBeat(doc, 2, -1);
+    const b = parseBeats(m).beats;
+    expect(b.map((x) => x.text)).toEqual(['홍설이 깬다', '엄마 생각', '봉오리를 본다']);
+    expect(b[1].body.trim()).toBe('엄마.');
+    expect(m.startsWith('머리글\n\n')).toBe(true);
+  });
+  it('30자 넘게 쓰면 「썼음」', () => {
+    expect(beatWritten(parseBeats(doc).beats[0])).toBe(false);
+    expect(beatWritten(parseBeats('%%▸ a%%\n' + '가'.repeat(31)).beats[0])).toBe(true);
+  });
+});

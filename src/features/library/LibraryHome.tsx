@@ -272,6 +272,9 @@ export function LibraryHome() {
             </div>
           )}
           <span className="count">{read.length}권</span>
+          <a className="find-link" href="#/discover">
+            무료 책 찾기
+          </a>
         </div>
         {read.length ? (
           <div className="cards">
@@ -309,6 +312,10 @@ export function LibraryHome() {
                 </div>
               </div>
             ))}
+            <a className="card add" href="#/discover">
+              <span className="serif">무료 책 찾기</span>
+              <span className="faint tiny">저작권이 끝난 책을 검색해 바로 넣어요</span>
+            </a>
           </div>
         ) : readAll.length ? (
           <p className="muted small">이 표시에 맞는 책이 없어요.</p>

@@ -12,6 +12,7 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { openSearchPanel, search, searchKeymap, SearchQuery, setSearchQuery } from '@codemirror/search';
 import { autocompletion, type CompletionContext } from '@codemirror/autocomplete';
+import { BEAT_LINE, beatLine } from '../../lib/beats';
 
 export interface EntryRef {
   id: string;
@@ -31,6 +32,7 @@ export interface EditorHandle {
   setMarks: (m: { from: number; to: number; cls: string }[]) => void;
   focus: () => void;
   insertText: (t: string) => void;
+  insertBeat: (text?: string) => void;
 }
 
 const style = HighlightStyle.define([
@@ -53,13 +55,40 @@ function buildDecos(view: EditorView, names: Set<string>, dialogue: boolean): De
   for (const { from, to } of view.visibleRanges) {
     const text = view.state.doc.sliceString(from, to);
     for (const m of text.matchAll(WL)) b.push({ from: from + m.index!, to: from + m.index! + m[0].length, d: Decoration.mark({ class: names.has(m[1].trim()) ? 'cm-wl' : 'cm-wl-missing' }) });
-    for (const m of text.matchAll(MEMO)) b.push({ from: from + m.index!, to: from + m.index! + m[0].length, d: Decoration.mark({ class: 'cm-memo' }) });
+    for (const m of text.matchAll(MEMO)) {
+      const a = from + m.index!;
+      const z = a + m[0].length;
+      const line = view.state.doc.lineAt(a);
+      if (line.from === a && line.to === z && BEAT_LINE.test(line.text)) {
+        // 쪽 줄거리: 줄 전체를 안내 카드로, 표시 기호는 흐리게
+        b.push({ from: a, to: a, d: Decoration.line({ class: 'cm-beat' }) });
+        b.push({ from: a, to: a + 3, d: Decoration.mark({ class: 'cm-beat-sym' }) });
+        b.push({ from: z - 2, to: z, d: Decoration.mark({ class: 'cm-beat-sym' }) });
+      } else b.push({ from: a, to: z, d: Decoration.mark({ class: 'cm-memo' }) });
+    }
     if (dialogue) for (const m of text.matchAll(DIALOGUE)) b.push({ from: from + m.index!, to: from + m.index! + m[0].length, d: Decoration.mark({ class: 'cm-dialogue' }) });
   }
-  b.sort((x, y) => x.from - y.from || x.to - y.to);
-  const rs = new RangeSetBuilder<Decoration>();
-  for (const x of b) rs.add(x.from, x.to, x.d);
-  return rs.finish();
+  return Decoration.set(
+    b.map((x) => x.d.range(x.from, x.to)),
+    true,
+  );
+}
+
+/** 커서 자리에 쪽 줄거리 줄을 넣는다 (빈 줄이면 그 줄에, 아니면 문단 뒤에) */
+function insertBeatAt(v: EditorView, text = ''): boolean {
+  const head = v.state.selection.main.head;
+  let line = v.state.doc.lineAt(head);
+  const mark = beatLine(text || ' ').replace(/ %%$/, ' %%');
+  if (!line.text.trim()) {
+    const ins = mark;
+    v.dispatch({ changes: { from: line.from, to: line.to, insert: ins + '\n' }, selection: { anchor: line.from + ins.length - 2 } });
+    return true;
+  }
+  // 문단 끝까지 내려가서 그 뒤에
+  while (line.number < v.state.doc.lines && v.state.doc.line(line.number + 1).text.trim()) line = v.state.doc.line(line.number + 1);
+  const ins = `\n\n${mark}\n`;
+  v.dispatch({ changes: { from: line.to, insert: ins }, selection: { anchor: line.to + 2 + mark.length - 2 }, effects: EditorView.scrollIntoView(line.to, { y: 'center' }) });
+  return true;
 }
 
 /** 집중 모드: 커서가 있는 문단(빈 줄 사이) 말고는 흐리게 */
@@ -142,6 +171,8 @@ export interface EditorProps {
   onLinkClick?: (name: string) => void;
   /** 글을 고르면 그 자리(화면 좌표) — 서식 말풍선을 띄우려고 */
   onSelectRect?: (r: { x: number; y: number } | null) => void;
+  /** 커서가 옮겨질 때 (지금 쓰는 쪽 줄거리를 보여 주려고) */
+  onCursor?: (pos: number, doc: string) => void;
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(props, ref) {
@@ -249,12 +280,14 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
             { key: 'Mod-i', run: (v) => (wrapSel(v, '*'), true) },
             { key: 'Mod-k', run: (v) => (wrapSel(v, '[[', ']]'), true) },
             { key: 'Mod-/', run: (v) => (wrapSel(v, '%%', '%%'), true) },
+            { key: 'Mod-Enter', run: (v) => insertBeatAt(v) },
             ...searchKeymap,
             ...historyKeymap,
             ...defaultKeymap,
           ]),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) propsRef.current.onChange(u.state.doc.toString());
+            if (u.selectionSet || u.docChanged) propsRef.current.onCursor?.(u.state.selection.main.head, u.state.doc.toString());
             if (u.selectionSet || u.docChanged) {
               const r = u.state.selection.main;
               propsRef.current.onSelection?.(r.empty ? 0 : u.state.sliceDoc(r.from, r.to).replace(/\s/g, '').length);
@@ -354,6 +387,12 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
     },
     setMarks: (m) => viewRef.current?.dispatch({ effects: setMarksEffect.of(m) }),
     focus: () => viewRef.current?.focus(),
+    insertBeat: (text) => {
+      const v = viewRef.current;
+      if (!v) return;
+      insertBeatAt(v, text);
+      v.focus();
+    },
     insertText: (t) => {
       const v = viewRef.current;
       if (!v) return;

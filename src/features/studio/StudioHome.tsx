@@ -240,7 +240,7 @@ function NewBook({ onClose }: { onClose: () => void }) {
     try {
       const b = await createBookFrom({ title: title.trim() || '제목 없는 책', author: user.nickname, kind: 'write', nodes: templateNodes(tpl), color, meta: { template: tpl } });
       onClose();
-      go(`write/${b.id}`);
+      go(`write/${b.id}?view=plan`);
     } catch (e) {
       toast((e as Error).message, 'err');
       setBusy(false);

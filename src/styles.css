@@ -160,7 +160,8 @@ button,
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 7px 13px;
+  padding: 0 14px;
+  min-height: 34px;
   cursor: pointer;
   line-height: 1.3;
   display: inline-flex;
@@ -175,6 +176,11 @@ button,
 button:hover,
 .btn:hover {
   border-color: var(--line-strong);
+  background: var(--bg);
+}
+button:active,
+.btn:active {
+  transform: translateY(0.5px);
 }
 button:disabled {
   opacity: 0.45;
@@ -185,6 +191,11 @@ button.primary,
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on-accent);
+}
+button.primary:hover,
+.btn.primary:hover {
+  background: var(--accent);
+  filter: brightness(1.08);
 }
 button.danger {
   color: var(--bad);
@@ -204,12 +215,16 @@ button.ghost:hover {
 }
 button.small {
   font-size: 13px;
-  padding: 4px 9px;
+  padding: 0 10px;
+  min-height: 28px;
 }
 .icon-btn {
   background: transparent;
   border: 0;
-  padding: 7px;
+  padding: 0;
+  min-width: 32px;
+  min-height: 32px;
+  justify-content: center;
   border-radius: 8px;
   color: var(--muted);
 }
@@ -257,22 +272,28 @@ label.check {
 }
 .seg {
   display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
+  gap: 2px;
+  padding: 2px;
+  background: var(--soft);
+  border-radius: 99px;
 }
 .seg button {
   border: 0;
-  border-radius: 0;
-  padding: 6px 11px;
+  border-radius: 99px;
+  padding: 0 12px;
+  min-height: 28px;
   font-size: 13px;
+  background: transparent;
+  color: var(--muted);
 }
-.seg button + button {
-  border-left: 1px solid var(--line);
+.seg button:hover {
+  background: transparent;
+  color: var(--text);
 }
 .seg button.on {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px var(--shade);
 }
 .chip {
   display: inline-flex;
@@ -422,9 +443,7 @@ label.check {
   align-items: flex-end;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 26px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--line);
+  margin-bottom: 30px;
 }
 .page-head h1 {
   font: 600 28px/1.3 var(--serif);
@@ -2929,4 +2948,222 @@ kbd {
   .ws-top:hover .icon-btn {
     opacity: 1;
   }
+}
+
+/* ---------- 무료 책 찾기 · 접는 세부 정보 ---------- */
+.find-link {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.find-link:hover {
+  text-decoration: underline;
+}
+a.card.add {
+  min-height: 132px;
+  text-decoration: none;
+  padding: 16px;
+  text-align: center;
+}
+a.card.add:hover {
+  color: var(--text);
+}
+details.more {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+details.more > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--faint);
+  list-style: none;
+}
+details.more > summary::-webkit-details-marker {
+  display: none;
+}
+details.more > summary::before {
+  content: '▸ ';
+}
+details.more[open] > summary::before {
+  content: '▾ ';
+}
+details.more[open] > summary {
+  margin-bottom: 12px;
+}
+details.more > .field,
+details.more > label.field {
+  margin-bottom: 14px;
+}
+
+/* ---------- 구상: 줄거리 먼저 ---------- */
+.plan {
+  width: 100%;
+  max-width: 820px;
+  margin: 0 auto;
+}
+.plan h2 {
+  font-size: 20px;
+  font-weight: 600;
+}
+.plan-book {
+  margin-bottom: 34px;
+}
+.plain-area,
+.plain-title,
+.plain-input {
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  margin-left: -8px;
+}
+.plain-area {
+  resize: vertical;
+  line-height: 1.75;
+  font-size: 15px;
+  margin-top: 8px;
+}
+.plain-area.serif {
+  font-family: var(--serif);
+  font-size: 16px;
+}
+.plain-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+.plain-area:hover,
+.plain-title:hover,
+.plain-input:hover {
+  background: var(--soft);
+}
+.plain-area:focus,
+.plain-title:focus,
+.plain-input:focus {
+  outline: none;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.plain-area::placeholder,
+.plain-title::placeholder,
+.plain-input::placeholder {
+  color: var(--faint);
+}
+.plan-part {
+  margin: 34px 0 6px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.plan-part .plain-title {
+  font-size: 19px;
+}
+.plan-ch {
+  padding: 14px 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+.plan-ch.scene {
+  margin-left: 24px;
+}
+.plan-ch > .row {
+  gap: 8px;
+}
+.plan-ch .plain-area {
+  color: var(--muted);
+  font-size: 14px;
+  margin-top: 2px;
+}
+.beats {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 2px;
+}
+.beats li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 2px;
+}
+.beats .plain-input {
+  font-size: 14px;
+  padding: 4px 8px;
+  margin-left: 0;
+}
+.beat-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+}
+.beats li.done .beat-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.beats li.done .plain-input {
+  color: var(--muted);
+}
+.beat-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  flex: none;
+}
+.beat-tools .icon-btn {
+  min-width: 26px;
+  min-height: 26px;
+  font-size: 12px;
+}
+@media (hover: hover) {
+  .beat-tools {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .beats li:hover .beat-tools,
+  .beats li:focus-within .beat-tools {
+    opacity: 1;
+  }
+}
+.plain-input.add {
+  font-size: 13.5px;
+  margin: 4px 0 0 7px;
+  width: calc(100% - 7px);
+}
+.plan-ch > .quiet-btn {
+  margin: 4px 0 0 7px;
+}
+.beat-now {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  min-width: 0;
+}
+.beat-now .ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* 원고 안 쪽 줄거리 안내 줄 */
+.cm-line.cm-beat {
+  font-family: var(--sans);
+  font-size: 0.82em;
+  color: var(--muted);
+  background: var(--soft);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  padding: 3px 10px !important;
+}
+.cm-beat-sym {
+  color: var(--faint);
+  font-size: 0.85em;
+  opacity: 0.6;
 }
