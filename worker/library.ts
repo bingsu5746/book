@@ -18,7 +18,7 @@ import { cleanSynopsis, FALLBACK, infoMessages, INFO_MARK, MODEL, modelInput, pa
 import { askGemini, GeminiDayLimit, geminiKey, geminiModels, pacificDay, type Msg } from './gemini';
 import { relayFetch } from './relay';
 import { matterNodes } from '../src/lib/matter';
-import { clueMessages, parseClues, readerMessages, parseReader, sentencesWith, synonymMessages, parseOptions, defineMessages, cleanRecap, conflictMessages, dialogueMessages, fakeTool, findDialogue, markDialogue, namesMessages, parseEdits, parseIssues, parseNames, parseQuestions, parseSpeakers, polishMessages, previousDigest, questionMessages, readJson, recapMessages, TOOLS, type ToolName } from './tools';
+import { worldQuestionMessages, clueMessages, parseClues, readerMessages, parseReader, sentencesWith, synonymMessages, parseOptions, defineMessages, cleanRecap, conflictMessages, dialogueMessages, fakeTool, findDialogue, markDialogue, namesMessages, parseEdits, parseIssues, parseNames, parseQuestions, parseSpeakers, polishMessages, previousDigest, questionMessages, readJson, recapMessages, TOOLS, type ToolName } from './tools';
 import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, SECTIONS, sectionMessages, type ChapterNote } from './analysis';
 /** 한 사람이 하루에 시작할 수 있는 분석집 수 */
 const ANALYSIS_DAILY = 5;
@@ -308,6 +308,7 @@ export class Library extends DurableObject<Env> {
     if (path === 'ai/tool' && method === 'POST') return this.aiTool(user, b);
     if (path === 'ai/recap' && method === 'POST') return this.aiRecap(user, b);
     if (path === 'ai/define' && method === 'POST') return this.aiDefine(user, b);
+    if (path === 'ai/worldq' && method === 'POST') return this.aiWorldQuestions(user, b);
     if (path === 'ai/status' && method === 'GET') {
       const day = pacificDay(Date.now());
       return json({ gemini: !!geminiKey(this.env), cloudflare: !!this.env.AI, geminiOut: this.rows('SELECT model FROM gem_out WHERE day = ?', day).map((r) => r.model), lastVia: this.lastVia });
@@ -1286,6 +1287,28 @@ export class Library extends DurableObject<Env> {
     return json({ lines: parseSpeakers(o, lines), left });
   }
 
+  /** 새 이야기 · 세계를 세우는 후속 질문: 작가가 한 답을 보고 질문만 돌려준다 */
+  private async aiWorldQuestions(user: UserRow, b: Body) {
+    const pair = (v: unknown) => {
+      const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+      return { q: str(o.q, 300).trim(), a: str(o.a, 3000).trim() };
+    };
+    const current = pair(b.current);
+    const answered = (Array.isArray(b.answered) ? b.answered : []).slice(0, 8).map(pair).filter((x) => x.q && x.a);
+    if (!current.q || current.a.replace(/\s/g, '').length < 10) return fail('먼저 이 질문에 답을 몇 줄 써 주세요.');
+    const gate = this.aiGate(user);
+    if (gate instanceof Response) return gate;
+    let o: Record<string, unknown> | null = null;
+    try {
+      o = readJson(await this.callAI(worldQuestionMessages(answered, current), 900));
+    } catch (e) {
+      console.error('ai worldq', e instanceof Error ? e.message : String(e));
+    }
+    const questions = o ? parseQuestions(o) : [];
+    if (!questions.length) return fail('AI 가 질문을 만들지 못했어요. 잠시 뒤 다시 해 주세요.', 502);
+    this.aiCount(user, gate.day);
+    return json({ questions, left: AI_DAILY - gate.used - 1 });
+  }
   /** 읽다가 모르는 말: 문장 맥락에 맞는 짧은 뜻풀이 */
   private async aiDefine(user: UserRow, b: Body) {
     const word = str(b.word, 40).trim();

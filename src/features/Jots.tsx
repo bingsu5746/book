@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { ago } from '../lib/text';
 import type { Book } from '../lib/types';
 import { confirmBox, Empty, Icon, Menu, Modal, Spinner, toast, useAsync } from '../lib/ui';
+import { isSeedJot, SEED_KINDS, SEEDS, seedJotText, seedOfDay, splitSeedJot, type SeedKind } from '../lib/seeds';
 
 export interface Jot {
   id: string;
@@ -137,6 +138,7 @@ export function JotsPage() {
           <p className="sub">떠오른 장면 · 대사 · 이름을 적어 두는 곳. 어디서나 Ctrl/⌘ + J 로 바로 적을 수 있어요.</p>
         </div>
       </div>
+      <SeedCard recent={(data?.jots ?? []).filter((j) => isSeedJot(j.text)).slice(0, 6)} onSaved={reload} />
       <div className="panel stack" style={{ marginBottom: 24 }}>
         <textarea className="input serif" rows={3} placeholder="무엇이 떠올랐나요?" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && void add()} />
         <div className="row">
@@ -163,9 +165,18 @@ export function JotsPage() {
           {jots.map((j) => (
             <div key={j.id} className="panel row" style={{ alignItems: 'flex-start', padding: '14px 16px' }}>
               <div className="grow">
-                <p className="serif" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.75 }}>
-                  {j.text}
-                </p>
+                {isSeedJot(j.text) ? (
+                  <>
+                    <p className="small seed-q">{splitSeedJot(j.text).q}</p>
+                    <p className="serif" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.75 }}>
+                      {splitSeedJot(j.text).a}
+                    </p>
+                  </>
+                ) : (
+                  <p className="serif" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.75 }}>
+                    {j.text}
+                  </p>
+                )}
                 <p className="faint tiny" style={{ marginTop: 6 }}>
                   {ago(j.updated)}
                 </p>
@@ -232,5 +243,127 @@ export function JotsPage() {
         </Modal>
       )}
     </>
+  );
+}
+
+/** 오늘의 글감 질문: 새 이야기 · 세계를 세워 가는 질문 하나. 답을 적으면 수첩에 남고, 원하면 AI 가 답을 보고 더 깊이 묻는다 */
+function SeedCard({ recent, onSaved }: { recent: Jot[]; onSaved: () => void }) {
+  const [kind, setKind] = useState<SeedKind | ''>('');
+  const [skip, setSkip] = useState(0);
+  const [q, setQ] = useState<string | null>(null);
+  const [answer, setAnswer] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [follow, setFollow] = useState<{ q: string; about: string }[]>([]);
+  const [open, setOpen] = useState(() => localStorage.getItem('seedOpen') !== '0');
+  const text = q ?? SEEDS[seedOfDay(Date.now(), kind, skip)].q;
+  const label = SEED_KINDS.find((k) => k.id === SEEDS.find((s) => s.q === text)?.kind)?.label;
+  const next = (k: SeedKind | '' = kind) => {
+    setKind(k);
+    setSkip((n) => n + 1);
+    setQ(null);
+    setAnswer('');
+    setFollow([]);
+  };
+  const toggle = () => {
+    setOpen(!open);
+    try {
+      localStorage.setItem('seedOpen', open ? '0' : '1');
+    } catch {
+      /* 저장 못 해도 괜찮음 */
+    }
+  };
+  const save = async (then?: () => void) => {
+    if (!answer.trim()) return;
+    setBusy(true);
+    try {
+      await api('jots', { body: { text: seedJotText(text, answer) } });
+      toast('수첩에 적었어요');
+      onSaved();
+      then?.();
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const ask = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ questions: { q: string; about: string }[] }>('ai/worldq', { body: { current: { q: text, a: answer }, answered: recent.map((j) => splitSeedJot(j.text)) } });
+      setFollow(r.questions);
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="panel stack seed-card" style={{ marginBottom: 20 }}>
+      <div className="row">
+        <h2 className="grow" style={{ fontSize: 13, letterSpacing: '.06em' }}>
+          오늘의 질문 <span className="faint tiny">{label}</span>
+        </h2>
+        <button className="ghost small" onClick={toggle} aria-expanded={open}>
+          {open ? '접기' : '펼치기'}
+        </button>
+      </div>
+      {open && (
+        <>
+          <p className="serif seed-text">{text}</p>
+          <textarea className="input serif" rows={4} placeholder="떠오르는 대로, 틀려도 괜찮아요. 한두 줄이면 돼요." value={answer} onChange={(e) => setAnswer(e.target.value)} />
+          <div className="row wrap" style={{ gap: 6 }}>
+            <button className="primary" disabled={!answer.trim() || busy} onClick={() => save(() => next())}>
+              수첩에 적고 다음 질문
+            </button>
+            <button disabled={answer.replace(/\s/g, '').length < 10 || busy} onClick={ask}>
+              {busy ? '생각하는 중…' : '답을 보고 더 묻기 (AI)'}
+            </button>
+            <span className="grow" />
+            <button className="ghost small" onClick={() => next()}>
+              다른 질문
+            </button>
+          </div>
+          <div className="row wrap" style={{ gap: 4 }}>
+            {SEED_KINDS.map((k) => (
+              <button key={k.id} className={`chip${kind === k.id ? ' on' : ''}`} onClick={() => next(kind === k.id ? '' : k.id)}>
+                {k.label}
+              </button>
+            ))}
+          </div>
+          {!!follow.length && (
+            <div className="stack" style={{ gap: 8 }}>
+              <h3 className="small" style={{ margin: 0 }}>
+                답을 보고 떠오른 질문 <span className="faint tiny">· 질문만 드려요. 답은 작가가 정해요.</span>
+              </h3>
+              {follow.map((f, i) => (
+                <div key={i} className="ai-card">
+                  <p className="serif" style={{ margin: 0 }}>
+                    {f.q}
+                  </p>
+                  <div className="row" style={{ gap: 6 }}>
+                    {f.about && <span className="faint tiny grow">· {f.about}</span>}
+                    <button
+                      className="small"
+                      onClick={() => {
+                        // 이 질문을 지금 질문으로 삼아 이어서 답한다 (먼저 쓴 답은 수첩에)
+                        const go = () => {
+                          setQ(f.q);
+                          setAnswer('');
+                          setFollow([]);
+                        };
+                        if (answer.trim()) void save(go);
+                        else go();
+                      }}
+                    >
+                      이 질문에 답하기
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }

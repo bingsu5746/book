@@ -129,3 +129,27 @@ describe('이야기 이동 경로', () => {
     expect(r.missing).toEqual([{ i: 5, title: '5장', place: '바다' }]);
   });
 });
+
+import { isSeedJot, SEEDS, seedJotText, seedOfDay, splitSeedJot } from './seeds';
+describe('오늘의 글감 질문', () => {
+  it('같은 날은 같은 질문, 날이 바뀌면 다른 질문, 종류를 고르면 그 종류에서', () => {
+    const t = new Date('2026-11-18T12:00:00').getTime();
+    expect(seedOfDay(t)).toBe(seedOfDay(t + 3600_000));
+    expect(seedOfDay(t)).not.toBe(seedOfDay(t + 86_400_000));
+    expect(seedOfDay(t, '', 1)).not.toBe(seedOfDay(t, '', 0));
+    expect(SEEDS[seedOfDay(t, 'place')].kind).toBe('place');
+  });
+  it('질문 은행: 중복 없고 모두 물음 · 종류마다 6개', () => {
+    expect(new Set(SEEDS.map((s) => s.q)).size).toBe(SEEDS.length);
+    expect(SEEDS.every((s) => /[?.]$/.test(s.q))).toBe(true);
+    const per: Record<string, number> = {};
+    for (const s of SEEDS) per[s.kind] = (per[s.kind] ?? 0) + 1;
+    expect(Object.values(per).every((n) => n === 6)).toBe(true);
+  });
+  it('수첩 글로 적고 다시 나눈다', () => {
+    const t = seedJotText('왜?', ' 그래서.\n둘째 줄 ');
+    expect(isSeedJot(t)).toBe(true);
+    expect(isSeedJot('그냥 메모')).toBe(false);
+    expect(splitSeedJot(t)).toEqual({ q: '왜?', a: '그래서.\n둘째 줄' });
+  });
+});

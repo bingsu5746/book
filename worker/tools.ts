@@ -18,6 +18,7 @@ export const MARK = {
   reader: '원고를 처음 읽는 독자',
   synonyms: '바꿔 쓸 말을 찾는 교정자',
   define: '낱말 뜻을 풀어 주는 사전 편찬자',
+  worldq: '새 이야기를 함께 세우는 질문자',
 } as const;
 
 const BASE = '원고와 주어진 자료에 실제로 쓰인 것만 근거로 한다. 없는 사실을 지어내지 않는다. 확실하지 않으면 뺀다.';
@@ -193,6 +194,23 @@ export function defineMessages(word: string, sentence: string) {
   ];
 }
 
+// ---------------------------------------------------------------- 새 이야기 · 세계를 세우는 후속 질문
+export function worldQuestionMessages(answered: { q: string; a: string }[], current: { q: string; a: string }) {
+  const log = [...answered, current].map((x, i) => `질문 ${i + 1}: ${x.q}\n작가의 답: ${x.a || '(아직 답하지 않음)'}`).join('\n\n');
+  return [
+    {
+      role: 'system',
+      content:
+        `너는 작가가 새 책의 이야기와 세계를 처음부터 세워 가도록 돕는 ${MARK.worldq}다. 아래는 작가가 지금까지 자기 질문에 한 답이다. ` +
+        '작가의 답에서 아직 정해지지 않았거나, 서로 부딪치거나, 더 파고들면 이야기가 커질 곳을 짚어 후속 질문 3개를 한국어로 던진다. ' +
+        '이야기 · 세계관 · 인물 · 규칙 · 사건을 대신 지어 주지 않는다: 설정을 제안하거나 답을 암시하지 않고 질문만 한다. ' +
+        '질문마다 작가의 답에 나온 말(이름 · 규칙 · 사건)을 짚어 구체적으로 묻고, 「예/아니오」로 끝나는 질문은 피한다. ' +
+        `${JSON_ONLY} 모양: {"questions": [{"q": "질문", "about": "질문이 짚는, 작가의 답에 나온 말"}]}`,
+    },
+    { role: 'user', content: log.slice(-6000) },
+  ];
+}
+
 // ---------------------------------------------------------------- 대사
 export interface Line {
   id: number;
@@ -349,6 +367,7 @@ export function fakeTool(sys: string, user: string): string | null {
     return JSON.stringify({ notes: q ? [{ kind: 'curious', quote: q.slice(0, 20), note: '가짜 독자: 여기서 다음이 궁금해졌다.' }] : [] });
   }
   if (sys.includes(MARK.synonyms)) return JSON.stringify({ options: [{ word: '가짜 말', note: '가짜: 차분한 문장에' }] });
+  if (sys.includes(MARK.worldq)) return JSON.stringify({ questions: [{ q: '가짜 후속 질문: 그 규칙을 어기면 누가 가장 먼저 알게 되는가?', about: '규칙' }, { q: '가짜 후속 질문: 그 세력은 왜 서로 양보하지 못하는가?', about: '세력' }, { q: '가짜 후속 질문: 그 사건 이전에는 어땠는가?', about: '사건' }] });
   if (sys.includes(MARK.define)) return '가짜 뜻풀이: 문장에서 쓰인 뜻이다.';
   if (sys.includes(MARK.questions)) return JSON.stringify({ questions: [{ q: '이 인물은 여기서 무엇을 원하지?', about: '주인공' }, { q: '이 장면이 끝날 때 무엇이 달라져야 하지?', about: '' }] });
   if (sys.includes(MARK.dialogue)) {
