@@ -131,6 +131,7 @@ describe('Gemini', () => {
   it('이름에 gemini 가 들어간 비밀값을 찾고, 정해 둔 이름을 먼저', () => {
     expect(geminiKey({ Life_gemini_api_key: ' a ', GEMINI_API_KEY: 'b', AI: {} })).toBe('b');
     expect(geminiKey({ book_Gemini: 'c' })).toBe('c');
+    expect(geminiKey({ GEMINI_API: ' k ', AI: {} })).toBe('k');
     expect(geminiKey({ GEMINI_KEY: '  ' })).toBeUndefined();
   });
   it('Flash → Flash Lite → Gemma 4 순서, 그림 · 음성 모델 빼기', () => {
@@ -146,5 +147,25 @@ describe('Gemini', () => {
     const g = geminiBody(m, 'gemma-4-26b-it');
     expect('systemInstruction' in g).toBe(false);
     expect(g.contents[0].parts[0].text).toBe('S\n\nU');
+  });
+});
+
+import { fakeOutline, OUTLINE_MARK, outlineMessages, parseOutline } from './outline';
+describe('줄거리 짜기', () => {
+  it('프롬프트에 아이디어 · 분위기 · 장 수 · 요청이 들어간다', () => {
+    const m = outlineMessages('소금 사원이 창고가 된다', { tone: '음울한', chapters: 9, feedback: '더 어둡게', prev: '' });
+    expect(m[0].content).toContain(OUTLINE_MARK);
+    expect(m[0].content).toContain('9개');
+    expect(m[1].content).toContain('소금 사원이 창고가 된다');
+    expect(m[1].content).toContain('분위기 · 장르: 음울한');
+    expect(m[1].content).toContain('더 어둡게');
+  });
+  it('답 읽기: 줄거리가 없으면 쓸 수 없고, 종류는 걸러 낸다', () => {
+    expect(parseOutline({ title: 'x' })).toBeNull();
+    const o = parseOutline(JSON.parse(fakeOutline(OUTLINE_MARK)!))!;
+    expect(o.chapters).toHaveLength(3);
+    expect(o.world.map((w) => w.kind)).toEqual(['place', 'faction']);
+    expect(parseOutline({ synopsis: 's', world: [{ name: 'a', kind: 'weird' }] })!.world[0].kind).toBe('concept');
+    expect(fakeOutline('다른 지시')).toBeNull();
   });
 });

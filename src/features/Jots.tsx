@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { ago } from '../lib/text';
 import type { Book } from '../lib/types';
-import { confirmBox, Empty, Icon, Menu, Modal, Spinner, toast, useAsync } from '../lib/ui';
+import { confirmBox, Empty, Icon, Menu, Modal, Spinner, SubNav, toast, useAsync } from '../lib/ui';
+import { OutlineTool } from './Outline';
 import { isSeedJot, SEED_KINDS, SEEDS, seedJotText, seedOfDay, splitSeedJot, type SeedKind } from '../lib/seeds';
 
 export interface Jot {
@@ -109,6 +110,7 @@ export function JotPicker({ onPick, onClose }: { onPick: (j: Jot) => void; onClo
 export function JotsPage() {
   const [text, setText] = useState('');
   const [show, setShow] = useState<'open' | 'done'>('open');
+  const [tab, setTab] = useState<'jots' | 'outline'>('jots');
   const [edit, setEdit] = useState<Jot | null>(null);
   const { data, loading, reload, setData } = useAsync(async () => {
     const [j, b] = await Promise.all([api<{ jots: Jot[] }>('jots'), api<{ books: Book[] }>('books')]);
@@ -138,6 +140,20 @@ export function JotsPage() {
           <p className="sub">떠오른 장면 · 대사 · 이름을 적어 두는 곳. 어디서나 Ctrl/⌘ + J 로 바로 적을 수 있어요.</p>
         </div>
       </div>
+      <div className="with-sub">
+        <SubNav
+          value={tab}
+          onChange={setTab}
+          items={[
+            { id: 'jots', label: '수첩', icon: 'note', badge: (data?.jots ?? []).filter((j) => !j.done).length },
+            { id: 'outline', label: '줄거리 짜기', icon: 'pen' },
+          ]}
+        />
+        <div>
+          {tab === 'outline' ? (
+            <OutlineTool />
+          ) : (
+            <>
       <SeedCard recent={(data?.jots ?? []).filter((j) => isSeedJot(j.text)).slice(0, 6)} onSaved={reload} />
       <div className="panel stack" style={{ marginBottom: 24 }}>
         <textarea className="input serif" rows={3} placeholder="무엇이 떠올랐나요?" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && void add()} />
@@ -242,6 +258,10 @@ export function JotsPage() {
           <textarea className="input serif" rows={6} value={edit.text} onChange={(e) => setEdit({ ...edit, text: e.target.value })} />
         </Modal>
       )}
+            </>
+          )}
+        </div>
+      </div>
     </>
   );
 }

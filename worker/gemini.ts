@@ -57,7 +57,7 @@ export async function geminiModels(key: string, f: typeof fetch = fetch): Promis
 }
 
 /** 우리 메시지(system · user …)를 Gemini 모양으로. Gemma 는 시스템 지시를 첫 질문 앞에 붙인다 */
-export function geminiBody(messages: Msg[], model: string) {
+export function geminiBody(messages: Msg[], model: string, temperature = 0.2) {
   const gemma = model.startsWith('gemma');
   const sys = messages
     .filter((m) => m.role === 'system')
@@ -67,7 +67,7 @@ export function geminiBody(messages: Msg[], model: string) {
   return {
     ...(sys && !gemma ? { systemInstruction: { parts: [{ text: sys }] } } : {}),
     contents: rest.map((m, i) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: gemma && i === 0 && sys ? `${sys}\n\n${m.content}` : m.content }] })),
-    generationConfig: { temperature: 0.2 },
+    generationConfig: { temperature },
   };
 }
 
@@ -82,8 +82,8 @@ export function readGemini(json: unknown): string {
 
 export class GeminiDayLimit extends Error {}
 
-export async function askGemini(key: string, model: string, messages: Msg[], f: typeof fetch = fetch): Promise<string> {
-  const res = await f(`${GEM}/models/${encodeURIComponent(model)}:generateContent`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(geminiBody(messages, model)) });
+export async function askGemini(key: string, model: string, messages: Msg[], f: typeof fetch = fetch, temperature = 0.2): Promise<string> {
+  const res = await f(`${GEM}/models/${encodeURIComponent(model)}:generateContent`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(geminiBody(messages, model, temperature)) });
   const j = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
   const em = j?.error?.message ?? '';
   // 429 는 하루 한도일 수도, 분당 한도일 수도 있다: Google 이 보낸 말로 가른다

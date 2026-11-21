@@ -24,9 +24,9 @@ export function synopsisMessages(title: string, body: string) {
   ];
 }
 
-export function modelInput(model: string, messages: unknown[], max = 500) {
-  if (model === MODEL) return { messages, reasoning: { effort: 'low' }, max_tokens: max, temperature: 0.2 };
-  return { messages, chat_template_kwargs: { enable_thinking: false }, temperature: 0.2, max_completion_tokens: max };
+export function modelInput(model: string, messages: unknown[], max = 500, temperature = 0.2) {
+  if (model === MODEL) return { messages, reasoning: { effort: 'low' }, max_tokens: max, temperature };
+  return { messages, chat_template_kwargs: { enable_thinking: false }, temperature, max_completion_tokens: max };
 }
 
 /** 모델 답에서 글만 꺼낸다 ({ response } · { choices } · Responses { output } 모두) */

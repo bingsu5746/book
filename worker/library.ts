@@ -18,6 +18,7 @@ import { cleanSynopsis, FALLBACK, infoMessages, INFO_MARK, MODEL, modelInput, pa
 import { askGemini, GeminiDayLimit, geminiKey, geminiModels, pacificDay, type Msg } from './gemini';
 import { relayFetch } from './relay';
 import { matterNodes } from '../src/lib/matter';
+import { outlineMessages, parseOutline, fakeOutline } from './outline';
 import { worldQuestionMessages, clueMessages, parseClues, readerMessages, parseReader, sentencesWith, synonymMessages, parseOptions, defineMessages, cleanRecap, conflictMessages, dialogueMessages, fakeTool, findDialogue, markDialogue, namesMessages, parseEdits, parseIssues, parseNames, parseQuestions, parseSpeakers, polishMessages, previousDigest, questionMessages, readJson, recapMessages, TOOLS, type ToolName } from './tools';
 import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, SECTIONS, sectionMessages, type ChapterNote } from './analysis';
 /** 한 사람이 하루에 시작할 수 있는 분석집 수 */
@@ -309,6 +310,7 @@ export class Library extends DurableObject<Env> {
     if (path === 'ai/recap' && method === 'POST') return this.aiRecap(user, b);
     if (path === 'ai/define' && method === 'POST') return this.aiDefine(user, b);
     if (path === 'ai/worldq' && method === 'POST') return this.aiWorldQuestions(user, b);
+    if (path === 'ai/outline' && method === 'POST') return this.aiOutline(user, b);
     if (path === 'ai/status' && method === 'GET') {
       const day = pacificDay(Date.now());
       return json({ gemini: !!geminiKey(this.env), cloudflare: !!this.env.AI, geminiOut: this.rows('SELECT model FROM gem_out WHERE day = ?', day).map((r) => r.model), lastVia: this.lastVia });
@@ -1287,6 +1289,25 @@ export class Library extends DurableObject<Env> {
     return json({ lines: parseSpeakers(o, lines), left });
   }
 
+  /** 아이디어 → 줄거리 · 인물 · 세계 · 장 구성 초안 (저장은 하지 않고 초안만 돌려준다) */
+  private async aiOutline(user: UserRow, b: Body) {
+    const idea = str(b.idea, 3000).trim();
+    if (idea.replace(/\s/g, '').length < 10) return fail('아이디어를 한두 문장 이상 적어 주세요.');
+    const gate = this.aiGate(user);
+    if (gate instanceof Response) return gate;
+    const chapters = Math.max(3, Math.min(20, Math.floor(num(b.chapters, 8))));
+    let out = null;
+    try {
+      // 창의적인 글이라 온도를 높인다. 장 구성까지 담아야 해서 답이 길다
+      const o = readJson(await this.callAI(outlineMessages(idea, { tone: str(b.tone, 80).trim(), chapters, feedback: str(b.feedback, 400).trim(), prev: str(b.prev, 1500).trim() }), 4000, 0.8));
+      out = o ? parseOutline(o) : null;
+    } catch (e) {
+      console.error('ai outline', e instanceof Error ? e.message : String(e));
+    }
+    if (!out) return fail('AI 가 줄거리를 만들지 못했어요. 잠시 뒤 다시 해 주세요.', 502);
+    this.aiCount(user, gate.day);
+    return json({ outline: out, left: AI_DAILY - gate.used - 1 });
+  }
   /** 새 이야기 · 세계를 세우는 후속 질문: 작가가 한 답을 보고 질문만 돌려준다 */
   private async aiWorldQuestions(user: UserRow, b: Body) {
     const pair = (v: unknown) => {
@@ -1405,10 +1426,12 @@ export class Library extends DurableObject<Env> {
     if (v) this.gemList = { at: Date.now(), v };
     return v ?? [];
   }
-  private async callAI(messages: unknown[], max: number): Promise<string> {
+  private async callAI(messages: unknown[], max: number, temperature = 0.2): Promise<string> {
     if (this.env.FAKE_AI === '1') {
       // 개발용 (wrangler dev 에서는 Workers AI 를 부를 수 없다): 모양만 맞는 가짜 답
       const sys = String((messages[0] as { content?: string })?.content ?? '');
+      const fakeO = fakeOutline(sys);
+      if (fakeO) return fakeO;
       const fake = fakeTool(sys, String((messages[1] as { content?: string })?.content ?? ''));
       if (fake) return fake;
       if (sys.includes(INFO_MARK)) return JSON.stringify({ synopsis: '가짜 요약: 이 장에서 일이 일어난다.', pov: '홍설', place: '파빌리온', time: '오전 8시', tags: ['꿈', '시작'] });
@@ -1424,7 +1447,7 @@ export class Library extends DurableObject<Env> {
       const out = new Set(this.rows<{ model: string }>('SELECT model FROM gem_out WHERE day = ?', day).map((r) => r.model));
       for (const model of (await this.gemModels(key, f)).filter((m) => !out.has(m)).slice(0, 4)) {
         try {
-          const t = await askGemini(key, model, messages as Msg[], f);
+          const t = await askGemini(key, model, messages as Msg[], f, temperature);
           this.lastVia = `Gemini ${model}`;
           return t;
         } catch (e) {
@@ -1438,7 +1461,7 @@ export class Library extends DurableObject<Env> {
     if (!this.env.AI) throw last instanceof Error ? last : new Error('AI 연결이 없어요');
     for (const model of [MODEL, FALLBACK]) {
       try {
-        const t = readOutput(await this.env.AI.run(model as never, modelInput(model, messages, max) as never));
+        const t = readOutput(await this.env.AI.run(model as never, modelInput(model, messages, max, temperature) as never));
         if (t) {
           this.lastVia = `Cloudflare ${model}`;
           return t;

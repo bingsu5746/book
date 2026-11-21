@@ -139,12 +139,13 @@ describe('오늘의 글감 질문', () => {
     expect(seedOfDay(t, '', 1)).not.toBe(seedOfDay(t, '', 0));
     expect(SEEDS[seedOfDay(t, 'place')].kind).toBe('place');
   });
-  it('질문 은행: 중복 없고 모두 물음 · 종류마다 6개', () => {
+  it('질문 은행: 중복 없고 모두 물음 · 종류마다 10개', () => {
     expect(new Set(SEEDS.map((s) => s.q)).size).toBe(SEEDS.length);
     expect(SEEDS.every((s) => /[?.]$/.test(s.q))).toBe(true);
     const per: Record<string, number> = {};
     for (const s of SEEDS) per[s.kind] = (per[s.kind] ?? 0) + 1;
-    expect(Object.values(per).every((n) => n === 6)).toBe(true);
+    expect(SEEDS.length).toBe(80);
+    expect(Object.values(per).every((n) => n === 10)).toBe(true);
   });
   it('수첩 글로 적고 다시 나눈다', () => {
     const t = seedJotText('왜?', ' 그래서.\n둘째 줄 ');
