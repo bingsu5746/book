@@ -19,6 +19,8 @@ export const MARK = {
   synonyms: '바꿔 쓸 말을 찾는 교정자',
   define: '낱말 뜻을 풀어 주는 사전 편찬자',
   worldq: '새 이야기를 함께 세우는 질문자',
+  extract: '수첩에서 세계관 항목을 뽑는 편집자',
+  interview: '소설 속 인물',
 } as const;
 
 const BASE = '원고와 주어진 자료에 실제로 쓰인 것만 근거로 한다. 없는 사실을 지어내지 않는다. 확실하지 않으면 뺀다.';
@@ -211,6 +213,45 @@ export function worldQuestionMessages(answered: { q: string; a: string }[], curr
   ];
 }
 
+// ---------------------------------------------------------------- 수첩 답 → 세계관 항목 후보
+export function extractMessages(text: string, known: string[]) {
+  return [
+    {
+      role: 'system',
+      content:
+        `너는 ${MARK.extract}다. 작가가 새 책을 구상하며 질문에 쓴 답(수첩 글)에서 세계관 항목 후보를 뽑는다. ${BASE} ` +
+        '인물 · 장소 · 세력 · 사물 · 사건 · 개념(규칙 · 믿음 · 제도) · 종족 가운데, 작가가 답에 실제로 쓴 것만 고른다. 이름이 따로 없는 규칙 · 제도 · 믿음은 짧은 이름표(예: 「소금 의식」)를 붙여도 된다. ' +
+        '「이미 있는 항목」에 있는 것은 뺀다. 요약은 답에 쓰인 내용만 한 문장으로 쓰고, 없는 설정을 보태지 않는다. quote 는 근거가 된 글을 수첩에서 그대로 옮긴다. ' +
+        `${JSON_ONLY} 모양: {"names": [{"name": "이름 또는 이름표", "kind": "character | place | faction | item | event | concept | species | other 가운데 하나", "summary": "답에 쓰인 내용만 한 문장", "quote": "수첩에서 그대로 옮긴 글 일부 (한 글자도 바꾸지 않음)"}]}`,
+    },
+    { role: 'user', content: `이미 있는 항목: ${known.length ? known.slice(0, 300).join(', ') : '(없음)'}\n\n수첩 글:\n${clip(text, 12000).text}` },
+  ];
+}
+export function parseExtract(o: Record<string, unknown>): { name: string; kind: string; summary: string; quote: string }[] {
+  const seen = new Set<string>();
+  return arr(o.names)
+    .map((x) => ({ name: s(x.name, 40), kind: KINDS.includes(s(x.kind, 20)) ? s(x.kind, 20) : 'other', summary: s(x.summary, 200), quote: s(x.quote, 300) }))
+    .filter((x) => x.name && x.quote && !seen.has(x.name) && (seen.add(x.name), true))
+    .slice(0, 40);
+}
+
+// ---------------------------------------------------------------- 인물 인터뷰
+export function interviewMessages(entry: { name: string; kind: string; summary: string; body: string; fields: Record<string, string> }, world: string, history: { role: string; text: string }[], question: string) {
+  const fields = Object.entries(entry.fields).filter(([, v]) => v.trim()).map(([k, v]) => `${k}: ${v}`).join('\n');
+  return [
+    {
+      role: 'system',
+      content:
+        `너는 ${MARK.interview} 「${entry.name}」이다. 작가가 이 인물을 더 깊이 알려고 인터뷰를 하는 중이다. 아래 설정에 맞게 1인칭으로, 설정에 말투가 있으면 그 말투로 1~4문장으로 답한다. ` +
+        '설정에 있는 것과 어긋나는 말을 하지 않는다. 설정에 없는 것을 물으면 이 인물이 할 법한 대답을 지어서 하되 invented 를 true 로 한다. 설정만으로 답하면 false. ' +
+        '작가의 질문에 대신 답을 정해 주려는 훈계 · 설명은 하지 않고 인물로서만 말한다. ' +
+        `${JSON_ONLY} 모양: {"answer": "인물의 대답", "invented": true 또는 false}\n\n[인물 설정]\n이름: ${entry.name}\n종류: ${entry.kind}\n${entry.summary ? `요약: ${entry.summary}\n` : ''}${fields ? `${fields}\n` : ''}${entry.body ? `자세히: ${entry.body.slice(0, 2500)}\n` : ''}${world ? `\n[세계]\n${world.slice(0, 800)}` : ''}`,
+    },
+    ...history.slice(-8).map((h) => ({ role: h.role === 'a' ? 'assistant' : 'user', content: h.text })),
+    { role: 'user', content: question },
+  ];
+}
+
 // ---------------------------------------------------------------- 대사
 export interface Line {
   id: number;
@@ -368,6 +409,12 @@ export function fakeTool(sys: string, user: string): string | null {
   }
   if (sys.includes(MARK.synonyms)) return JSON.stringify({ options: [{ word: '가짜 말', note: '가짜: 차분한 문장에' }] });
   if (sys.includes(MARK.worldq)) return JSON.stringify({ questions: [{ q: '가짜 후속 질문: 그 규칙을 어기면 누가 가장 먼저 알게 되는가?', about: '규칙' }, { q: '가짜 후속 질문: 그 세력은 왜 서로 양보하지 못하는가?', about: '세력' }, { q: '가짜 후속 질문: 그 사건 이전에는 어땠는가?', about: '사건' }] });
+  if (sys.includes(MARK.extract)) {
+    const src = user.split('수첩 글:\n')[1] ?? '';
+    const w = src.match(/[가-힣]{2,5}(?= ?[은는이가을를의에])/)?.[0] ?? '';
+    return JSON.stringify({ names: w ? [{ name: w, kind: 'place', summary: '가짜 요약: 수첩에 나온 말.', quote: src.slice(src.indexOf(w), src.indexOf(w) + w.length + 4) }] : [] });
+  }
+  if (sys.includes(MARK.interview)) return JSON.stringify({ answer: '가짜 인물의 대답: 글쎄요, 그건 말하기 어렵군요.', invented: true });
   if (sys.includes(MARK.define)) return '가짜 뜻풀이: 문장에서 쓰인 뜻이다.';
   if (sys.includes(MARK.questions)) return JSON.stringify({ questions: [{ q: '이 인물은 여기서 무엇을 원하지?', about: '주인공' }, { q: '이 장면이 끝날 때 무엇이 달라져야 하지?', about: '' }] });
   if (sys.includes(MARK.dialogue)) {

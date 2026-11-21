@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api } from '../../lib/api';
 import { charsLabel, coverUrl } from '../../lib/BookCard';
 import { Desk, Manuscript, Shelf, Spine } from './Bookcase';
+import { groupBySeries, seriesOf } from '../../lib/series';
 import type { CoverStyle } from '../../lib/cover';
 import { useSession } from '../../lib/session';
 import { splitMarkdown } from '../../lib/split';
@@ -139,7 +140,7 @@ export function LibraryHome() {
       if (b.kind === 'write') {
         const blurb = String(b.meta.blurb ?? '').trim();
         const plot = String(b.meta.plot ?? '').trim();
-        return { ...base, writeHref: `#/write/${b.id}`, blurb: blurb || plot, blurbLabel: blurb ? '소개' : '구상 줄거리 · 나만 보여요', facts: [charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', `${ago(b.updated)} 고침`] };
+        return { ...base, writeHref: `#/write/${b.id}`, blurb: blurb || plot, blurbLabel: blurb ? '소개' : '구상 줄거리 · 나만 보여요', facts: [seriesOf(b.meta) ? `${seriesOf(b.meta)!.name}${seriesOf(b.meta)!.no ? ` ${seriesOf(b.meta)!.no}권` : ''}` : '', charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', `${ago(b.updated)} 고침`] };
       }
       const st = b.meta.readStatus === 'done' ? `다 읽음${b.meta.finishedAt ? ` ${b.meta.finishedAt}` : ''}` : b.meta.readStatus === 'want' ? '읽고 싶어요' : '';
       return {
@@ -227,9 +228,16 @@ export function LibraryHome() {
           count={finished.length}
           empty={<>「다 썼어요」(집필실 ⋯ 메뉴)를 누른 책이 여기 꽂혀요. 쓰는 중인 원고는 아래 책상에 있어요.</>}
         >
-          {finished.map((b) => (
-            <Spine key={b.id} b={{ id: b.id, title: b.title, author: b.author, color: b.color, chars: b.total_chars, href: `#/read/${b.id}`, progress: prog(`b:${b.id}`)?.f ?? null }} />
-          ))}
+          {groupBySeries(finished, (b) => b.meta).map((g, k) => {
+            const spines = g.items.map((b) => <Spine key={b.id} b={{ id: b.id, title: b.title, author: b.author, color: b.color, chars: b.total_chars, href: `#/read/${b.id}`, progress: prog(`b:${b.id}`)?.f ?? null, series: seriesOf(b.meta) }} />);
+            return g.series && g.items.length > 1 ? (
+              <div key={`s${k}`} className="spine-series" title={g.series}>
+                {spines}
+              </div>
+            ) : (
+              spines
+            );
+          })}
         </Shelf>
         <Shelf title="친구의 책" count={shared.length} empty={<>친구가 책을 공유하면 여기 꽂혀요.</>}>
           {shared.map((s) => (
@@ -273,7 +281,7 @@ export function LibraryHome() {
 
       <Desk count={drafts.length}>
         {drafts.map((b) => (
-          <Manuscript key={b.id} b={{ id: b.id, title: b.title, author: b.author, chars: b.total_chars ?? 0, chapters: b.node_count ?? 0, updated: b.updated, href: `#/read/${b.id}`, shared: b.shared ? (b.last_edition ? `${b.last_edition}판 공유` : '공유 중') : '' }} />
+          <Manuscript key={b.id} b={{ id: b.id, title: b.title, author: b.author, chars: b.total_chars ?? 0, chapters: b.node_count ?? 0, updated: b.updated, href: `#/read/${b.id}`, series: seriesOf(b.meta) ? `${seriesOf(b.meta)!.name}${seriesOf(b.meta)!.no ? ` ${seriesOf(b.meta)!.no}권` : ''}` : '', shared: b.shared ? (b.last_edition ? `${b.last_edition}판 공유` : '공유 중') : '' }} />
         ))}
         <a className="ms ms-new" href="#/studio">
           <span className="ms-title">+ 새 원고</span>

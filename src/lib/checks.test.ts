@@ -154,3 +154,70 @@ describe('오늘의 글감 질문', () => {
     expect(splitSeedJot(t)).toEqual({ q: '왜?', a: '그래서.\n둘째 줄' });
   });
 });
+
+import { forecast } from './forecast';
+import { backwards, chapterTimes, findTimeWords } from './timewords';
+import { emptyFieldQuestions } from './askfields';
+import { groupBySeries, seriesOf } from './series';
+describe('완성 예측', () => {
+  const now = new Date(2026, 10, 20);
+  const days = Array.from({ length: 14 }, (_, i) => ({ day: new Date(2026, 10, 20 - i).toLocaleDateString('sv-SE'), chars: 1000 }));
+  it('최근 14일 평균으로 완성 날짜 · 더 쓰면 당겨지는 날', () => {
+    const f = forecast(days, 10_000, 30_000, now, null)!;
+    expect(f).not.toBe('done');
+    if (f === 'done') return;
+    expect(f.perDay).toBe(1000);
+    expect(f.days).toBe(20);
+    expect(f.finish).toBe('2026-12-10');
+    expect(f.saved).toBe(20 - Math.ceil(20_000 / 1500));
+  });
+  it('마감일: 하루에 써야 할 글자와 맞출 수 있는지', () => {
+    const f = forecast(days, 10_000, 30_000, now, '2026-12-01')! as Exclude<ReturnType<typeof forecast>, 'done' | null>;
+    expect(f.deadline?.onTrack).toBe(false);
+    expect(f.deadline?.need).toBeGreaterThan(1000);
+    expect((forecast(days, 10_000, 30_000, now, '2026-12-31') as { deadline: { onTrack: boolean } }).deadline.onTrack).toBe(true);
+  });
+  it('목표 없음 · 이미 채움 · 안 쓴 지 오래면 예측 없음', () => {
+    expect(forecast(days, 0, 0, now)).toBeNull();
+    expect(forecast(days, 30_000, 30_000, now)).toBe('done');
+    expect(forecast([], 1, 30_000, now)).toBeNull();
+  });
+});
+describe('시간 표현 모으기', () => {
+  it('날짜 · 지난 시간 · 며칠 사이 · 계절 · 요일, 메모 안은 뺀다', () => {
+    const w = findTimeWords('1998년 겨울이었다. 사흘 뒤 그는 떠났다. 다음 날 금요일이었다. %%2001년 메모%%');
+    expect(w.map((x) => `${x.kind}:${x.text}`)).toEqual(['date:1998년', 'season:겨울', 'span:사흘 뒤', 'day:다음 날', 'weekday:금요일']);
+  });
+  it('장 연도 · 거꾸로 가는 곳', () => {
+    const t = chapterTimes([
+      { id: 'a', title: '1', body: '1998년 봄에', time: '' },
+      { id: 'b', title: '2', body: '', time: '1995년 여름' },
+      { id: 'c', title: '3', body: '글만 있다.' },
+    ]);
+    expect(t.map((x) => x.year)).toEqual([1998, 1995, null]);
+    expect(backwards(t).map((x) => `${x.from.title}>${x.to.title}`)).toEqual(['1>2']);
+    expect(t[1].words[0]).toMatchObject({ kind: 'meta', text: '1995년 여름' });
+  });
+});
+describe('세계관 빈칸 질문', () => {
+  it('비어 있는 칸만, 이름을 넣어서', () => {
+    const q = emptyFieldQuestions({ name: '홍설', fields: { 나이: '17', 말투: ' ' } }, ['나이', '말투', '비밀', '특이한 칸']);
+    expect(q.map((x) => x.field)).toEqual(['말투', '비밀', '특이한 칸']);
+    expect(q[0].q).toContain('홍설');
+    expect(q[2].q).toBe('홍설의 「특이한 칸」은(는) 어떤가요?');
+  });
+});
+describe('시리즈 묶기', () => {
+  it('같은 시리즈를 처음 나온 자리로 모으고 권 순서대로', () => {
+    const books = [
+      { t: 'a', m: { series: '소금', seriesNo: 2 } },
+      { t: 'b', m: {} },
+      { t: 'c', m: { series: '소금', seriesNo: 1 } },
+      { t: 'd', m: { series: '바다' } },
+    ];
+    const g = groupBySeries(books, (b) => b.m);
+    expect(g.map((x) => `${x.series}:${x.items.map((i) => i.t).join('')}`)).toEqual(['소금:ca', 'null:b', '바다:d']);
+    expect(seriesOf({ series: ' x ', seriesNo: 'z' })).toEqual({ name: 'x', no: null });
+    expect(seriesOf({})).toBeNull();
+  });
+});

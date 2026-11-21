@@ -18,6 +18,7 @@ import { cleanSynopsis, FALLBACK, infoMessages, INFO_MARK, MODEL, modelInput, pa
 import { askGemini, GeminiDayLimit, geminiKey, geminiModels, pacificDay, type Msg } from './gemini';
 import { relayFetch } from './relay';
 import { matterNodes } from '../src/lib/matter';
+import { extractMessages, parseExtract, interviewMessages } from './tools';
 import { outlineMessages, parseOutline, fakeOutline } from './outline';
 import { worldQuestionMessages, clueMessages, parseClues, readerMessages, parseReader, sentencesWith, synonymMessages, parseOptions, defineMessages, cleanRecap, conflictMessages, dialogueMessages, fakeTool, findDialogue, markDialogue, namesMessages, parseEdits, parseIssues, parseNames, parseQuestions, parseSpeakers, polishMessages, previousDigest, questionMessages, readJson, recapMessages, TOOLS, type ToolName } from './tools';
 import { chapterMessages, chapterSummaries, cleanSection, digest, parseChapterNote, SECTIONS, sectionMessages, type ChapterNote } from './analysis';
@@ -189,6 +190,9 @@ export class Library extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS analysis_jobs_book ON analysis_jobs (book_id);
       CREATE TABLE IF NOT EXISTS ai_usage (user_id TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (user_id, day));
       CREATE TABLE IF NOT EXISTS gem_out (model TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (model, day));
+      CREATE TABLE IF NOT EXISTS book_daily (book_id TEXT NOT NULL, day TEXT NOT NULL, chars INTEGER NOT NULL, PRIMARY KEY (book_id, day));
+      CREATE TABLE IF NOT EXISTS moods (id TEXT PRIMARY KEY, book_id TEXT NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, caption TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS moods_book ON moods (book_id);
       CREATE TABLE IF NOT EXISTS covers (book_id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, updated INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS links (token TEXT PRIMARY KEY, book_id TEXT NOT NULL, owner TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER, revoked INTEGER);
       CREATE INDEX IF NOT EXISTS links_book ON links (book_id);
@@ -311,6 +315,8 @@ export class Library extends DurableObject<Env> {
     if (path === 'ai/define' && method === 'POST') return this.aiDefine(user, b);
     if (path === 'ai/worldq' && method === 'POST') return this.aiWorldQuestions(user, b);
     if (path === 'ai/outline' && method === 'POST') return this.aiOutline(user, b);
+    if (path === 'ai/extract' && method === 'POST') return this.aiExtract(user, b);
+    if (path === 'ai/interview' && method === 'POST') return this.aiInterview(user, b);
     if (path === 'ai/status' && method === 'GET') {
       const day = pacificDay(Date.now());
       return json({ gemini: !!geminiKey(this.env), cloudflare: !!this.env.AI, geminiOut: this.rows('SELECT model FROM gem_out WHERE day = ?', day).map((r) => r.model), lastVia: this.lastVia });
@@ -451,6 +457,33 @@ export class Library extends DurableObject<Env> {
     if (path === 'community' && method === 'GET') return this.community(user);
     if (path === 'feed' && method === 'GET') return this.feed(user);
     if ((r = m(/^editions\/([a-z0-9]+)$/)) && method === 'GET') return this.getEdition(user, r[1]);
+    if ((r = m(/^books\/([a-z0-9]+)\/daily$/)) && method === 'GET') {
+      this.ownBook(user, r[1]);
+      return json({ days: this.rows('SELECT day, chars FROM book_daily WHERE book_id = ? ORDER BY day DESC LIMIT 120', r[1]) });
+    }
+    if ((r = m(/^books\/([a-z0-9]+)\/moods$/))) {
+      if (method === 'GET') {
+        this.ownBook(user, r[1]);
+        return json({ moods: this.rows('SELECT id, caption, sort, created FROM moods WHERE book_id = ? ORDER BY sort, created', r[1]) });
+      }
+      if (method === 'POST') return this.addMood(user, r[1], b);
+    }
+    if ((r = m(/^moods\/([a-z0-9]+)$/))) {
+      const mood = this.one('SELECT m.*, b.owner AS owner FROM moods m JOIN books b ON b.id = m.book_id WHERE m.id = ?', r[1]);
+      if (!mood || mood.owner !== user.id) return fail('그림을 찾을 수 없어요.', 404);
+      if (method === 'GET') {
+        const bin = Uint8Array.from(atob(String(mood.data)), (x) => x.charCodeAt(0));
+        return new Response(bin, { headers: { 'content-type': String(mood.mime), 'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
+      }
+      if (method === 'PATCH') {
+        this.sql.exec('UPDATE moods SET caption = ? WHERE id = ?', str(b.caption, 200), r[1]);
+        return json({ ok: true });
+      }
+      if (method === 'DELETE') {
+        this.sql.exec('DELETE FROM moods WHERE id = ?', r[1]);
+        return json({ ok: true });
+      }
+    }
     if ((r = m(/^books\/([a-z0-9]+)\/cover$/))) {
       if (method === 'GET') {
         this.readableBook(user, r[1]);
@@ -690,7 +723,7 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('DELETE FROM edition_nodes WHERE edition_id = ?', e.id);
       this.sql.exec('DELETE FROM likes WHERE edition_id = ?', e.id);
     }
-    for (const t of ['nodes', 'snapshots', 'editions', 'annotations', 'ratings', 'links', 'covers']) this.sql.exec(`DELETE FROM ${t} WHERE book_id = ?`, id);
+    for (const t of ['nodes', 'snapshots', 'editions', 'annotations', 'ratings', 'links', 'covers', 'book_daily', 'moods']) this.sql.exec(`DELETE FROM ${t} WHERE book_id = ?`, id);
     this.sql.exec('DELETE FROM books WHERE id = ?', id);
   }
   private touchBook(id: string) {
@@ -790,7 +823,10 @@ export class Library extends DurableObject<Env> {
         const chars = charsNoSpace(body);
         const day = /^\d{4}-\d{2}-\d{2}$/.test(String(b.day ?? '')) ? String(b.day) : new Date().toISOString().slice(0, 10);
         const gain = chars - Number(n.chars);
-        if (gain > 0 && gain < 200_000) this.sql.exec('INSERT INTO daily (user_id, day, chars) VALUES (?, ?, ?) ON CONFLICT (user_id, day) DO UPDATE SET chars = chars + excluded.chars', user.id, day, gain);
+        if (gain > 0 && gain < 200_000) {
+          this.sql.exec('INSERT INTO daily (user_id, day, chars) VALUES (?, ?, ?) ON CONFLICT (user_id, day) DO UPDATE SET chars = chars + excluded.chars', user.id, day, gain);
+          this.sql.exec('INSERT INTO book_daily (book_id, day, chars) VALUES (?, ?, ?) ON CONFLICT (book_id, day) DO UPDATE SET chars = chars + excluded.chars', n.book_id, day, gain);
+        }
         put('body', body);
         put('chars', chars);
       }
@@ -1102,6 +1138,20 @@ export class Library extends DurableObject<Env> {
     if (this.autoAnalysisOn(user) && !parseJson(full.meta).analysisOf) analysis = (await this.startAnalysis(user, bookId)) === true;
     return json({ edition: { id, number }, analysis });
   }
+  // ---------------------------------------------------------------- 무드보드
+  private addMood(user: UserRow, bookId: string, b: Body) {
+    this.ownBook(user, bookId);
+    const mime = String(b.mime ?? '');
+    const data = String(b.data ?? '');
+    if (!IMAGE_TYPES.has(mime) || !/^[A-Za-z0-9+/=]+$/.test(data)) return fail('그림 파일이 아니에요.');
+    if (data.length > MAX_IMAGE) return fail('그림이 너무 커요.', 413);
+    const n = Number(this.one('SELECT COUNT(*) AS n FROM moods WHERE book_id = ?', bookId)?.n ?? 0);
+    if (n >= 40) return fail('한 책의 무드보드에는 그림을 40장까지 둘 수 있어요.', 413);
+    const id = newId();
+    this.sql.exec('INSERT INTO moods (id, book_id, mime, data, caption, sort, created) VALUES (?, ?, ?, ?, ?, ?, ?)', id, bookId, mime, data, str(b.caption, 200), n, Date.now());
+    return json({ id });
+  }
+
   // ---------------------------------------------------------------- 그림 표지
   private coverResponse(bookId: string) {
     const c = this.one('SELECT mime, data FROM covers WHERE book_id = ?', bookId);
@@ -1289,6 +1339,51 @@ export class Library extends DurableObject<Env> {
     return json({ lines: parseSpeakers(o, lines), left });
   }
 
+  /** 수첩 글에서 세계관 항목 후보 뽑기 (저장은 하지 않는다) */
+  private async aiExtract(user: UserRow, b: Body) {
+    const text = str(b.text, 14000).trim();
+    if (text.replace(/\s/g, '').length < 30) return fail('수첩에 질문 답이 더 있어야 해요.');
+    const gate = this.aiGate(user);
+    if (gate instanceof Response) return gate;
+    const known = (Array.isArray(b.known) ? b.known : []).map((x) => str(x, 40).trim()).filter(Boolean).slice(0, 300);
+    let names: ReturnType<typeof parseExtract> = [];
+    try {
+      const o = readJson(await this.callAI(extractMessages(text, known), 3000));
+      names = o ? parseExtract(o) : [];
+    } catch (e) {
+      console.error('ai extract', e instanceof Error ? e.message : String(e));
+      return fail('AI 가 답하지 않았어요. 잠시 뒤 다시 해 주세요.', 502);
+    }
+    this.aiCount(user, gate.day);
+    return json({ names, left: AI_DAILY - gate.used - 1 });
+  }
+  /** 인물 인터뷰: 항목 설정을 바탕으로 인물 입장에서 답한다 (저장하지 않음) */
+  private async aiInterview(user: UserRow, b: Body) {
+    const e = (b.entry && typeof b.entry === 'object' ? b.entry : {}) as Record<string, unknown>;
+    const name = str(e.name, 40).trim();
+    const question = str(b.question, 400).trim();
+    if (!name || !question) return fail('질문을 적어 주세요.');
+    const fields: Record<string, string> = {};
+    for (const [k, v] of Object.entries((e.fields && typeof e.fields === 'object' ? e.fields : {}) as Record<string, unknown>).slice(0, 30)) if (typeof v === 'string' && v.trim()) fields[str(k, 30)] = str(v, 600);
+    const history = (Array.isArray(b.history) ? b.history : []).slice(-8).map((h) => {
+      const o = (h && typeof h === 'object' ? h : {}) as Record<string, unknown>;
+      return { role: o.role === 'a' ? 'a' : 'q', text: str(o.text, 600) };
+    });
+    const gate = this.aiGate(user);
+    if (gate instanceof Response) return gate;
+    let answer = '';
+    let invented = true;
+    try {
+      const o = readJson(await this.callAI(interviewMessages({ name, kind: str(e.kind, 20), summary: str(e.summary, 400), body: str(e.body, 3000), fields }, str(b.world, 900), history, question), 800, 0.8));
+      answer = typeof o?.answer === 'string' ? o.answer.trim().slice(0, 800) : '';
+      invented = o?.invented !== false;
+    } catch (er) {
+      console.error('ai interview', er instanceof Error ? er.message : String(er));
+    }
+    if (!answer) return fail('인물이 대답하지 않았어요. 잠시 뒤 다시 해 주세요.', 502);
+    this.aiCount(user, gate.day);
+    return json({ answer, invented, left: AI_DAILY - gate.used - 1 });
+  }
   /** 아이디어 → 줄거리 · 인물 · 세계 · 장 구성 초안 (저장은 하지 않고 초안만 돌려준다) */
   private async aiOutline(user: UserRow, b: Body) {
     const idea = str(b.idea, 3000).trim();

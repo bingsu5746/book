@@ -16,6 +16,8 @@ export interface SpineBook {
   /** 읽는 중이면 0~1 (책갈피 끈) */
   progress?: number | null;
   note?: string;
+  /** 시리즈 이름 · 권 */
+  series?: { name: string; no: number | null } | null;
 }
 
 export function Spine({ b }: { b: SpineBook }) {
@@ -33,10 +35,16 @@ export function Spine({ b }: { b: SpineBook }) {
       className="spine"
       href={b.href}
       style={{ ['--c' as string]: bg, ['--t' as string]: fg, height, width }}
-      title={`${b.title}${b.author ? ` · ${b.author}` : ''}${b.note ? ` · ${b.note}` : ''}`}
+      title={`${b.title}${b.author ? ` · ${b.author}` : ''}${b.note ? ` · ${b.note}` : ''}${b.series ? ` · ${b.series.name}${b.series.no ? ` ${b.series.no}권` : ''}` : ''}`}
       aria-label={`${b.title}${b.author ? `, ${b.author}` : ''}${reading ? `, ${Math.round(b.progress! * 100)}% 읽음` : ''}`}
     >
-      <span className="spine-band" aria-hidden="true" />
+      {b.series?.no ? (
+        <span className="spine-no" aria-hidden="true">
+          {b.series.no}
+        </span>
+      ) : (
+        <span className="spine-band" aria-hidden="true" />
+      )}
       <span className="spine-title" style={{ fontSize: fs }}>
         {b.title || '제목 없음'}
       </span>
@@ -72,6 +80,7 @@ export interface DeskBook {
   updated: number;
   href: string;
   shared?: string;
+  series?: string;
 }
 
 /** 원고 더미: 글이 많을수록 종이가 두껍게 쌓인다 */
@@ -88,6 +97,12 @@ export function Manuscript({ b }: { b: DeskBook }) {
         {b.chapters ? ` · ${b.chapters}장` : ''}
         <br />
         {ago(b.updated)} 고침{b.shared ? ` · ${b.shared}` : ''}
+        {b.series && (
+          <>
+            <br />
+            {b.series}
+          </>
+        )}
       </span>
     </a>
   );

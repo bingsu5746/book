@@ -169,3 +169,19 @@ describe('줄거리 짜기', () => {
     expect(fakeOutline('다른 지시')).toBeNull();
   });
 });
+
+import { extractMessages, interviewMessages, parseExtract } from './tools';
+describe('수첩 → 세계관 · 인터뷰', () => {
+  it('근거 글이 없는 항목은 빼고 중복 이름도 뺀다', () => {
+    const r = parseExtract({ names: [{ name: '소금 사원', kind: 'place', summary: 's', quote: '소금으로 지은 사원' }, { name: '소금 사원', kind: 'place', quote: 'q' }, { name: '빈', kind: 'x', summary: '' }] });
+    expect(r.map((x) => x.name)).toEqual(['소금 사원']);
+    expect(parseExtract({ names: [{ name: 'a', quote: 'q', kind: '이상한' }] })[0].kind).toBe('other');
+  });
+  it('프롬프트: 이미 있는 항목 · 인물 설정 · 대화 기록이 들어간다', () => {
+    expect(extractMessages('답', ['홍설'])[1].content).toContain('홍설');
+    const m = interviewMessages({ name: '홍설', kind: '인물', summary: '주인공', body: '', fields: { 말투: '느릿하게' } }, '소금 세계', [{ role: 'q', text: '왜?' }, { role: 'a', text: '그냥.' }], '지금은?');
+    expect(m[0].content).toContain('말투: 느릿하게');
+    expect(m[0].content).toContain('소금 세계');
+    expect(m.map((x) => x.role)).toEqual(['system', 'user', 'assistant', 'user']);
+  });
+});

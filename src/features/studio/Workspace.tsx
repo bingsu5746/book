@@ -16,6 +16,8 @@ import { Editor, type EditorHandle } from './Editor';
 import { TidyBreaks } from './TidyBreaks';
 import { NameCheck } from './NameCheck';
 import { ClueLedger } from './ClueLedger';
+import { MoodBoard } from './MoodBoard';
+import { TimeWords } from './TimeWords';
 import { matterNodes } from '../../lib/matter';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
@@ -26,10 +28,10 @@ import { infoGaps, mergeInfo, shouldAutoFill, type ChapterInfo } from '../../lib
 import { dictationSupported, startDictation } from '../../lib/dictate';
 import { JotPicker } from '../Jots';
 
-type View = 'plan' | 'write' | 'cork' | 'outline' | 'threads' | 'clues' | 'replace' | 'stats' | 'notes' | 'settings';
-const VIEWS: View[] = ['plan', 'write', 'cork', 'outline', 'threads', 'clues', 'replace', 'stats', 'notes', 'settings'];
-const VIEW_LABEL: Record<View, string> = { plan: '구상 (줄거리 먼저)', write: '원고', cork: '코르크보드', outline: '개요', threads: '플롯 선', clues: '복선 장부', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
-const VIEW_ICON: Record<View, string> = { plan: 'note', write: 'pen', cork: 'grid', outline: 'layers', threads: 'share', clues: 'link', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
+type View = 'plan' | 'write' | 'cork' | 'outline' | 'threads' | 'clues' | 'mood' | 'replace' | 'stats' | 'notes' | 'settings';
+const VIEWS: View[] = ['plan', 'write', 'cork', 'outline', 'threads', 'clues', 'mood', 'replace', 'stats', 'notes', 'settings'];
+const VIEW_LABEL: Record<View, string> = { plan: '구상 (줄거리 먼저)', write: '원고', cork: '코르크보드', outline: '개요', threads: '플롯 선', clues: '복선 장부', mood: '무드보드', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
+const VIEW_ICON: Record<View, string> = { plan: 'note', write: 'pen', cork: 'grid', outline: 'layers', threads: 'share', clues: 'link', mood: 'eye', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
 interface WsPrefs {
   binder: boolean;
   side: boolean;
@@ -94,6 +96,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const [items, setItems] = useState<WItem[]>([]);
   const [tidy, setTidy] = useState(false);
   const [nameCheck, setNameCheck] = useState(false);
+  const [timeWords, setTimeWords] = useState(false);
   const [save, setSave] = useState({ pending: 0, error: null as string | null });
   const [selChars, setSelChars] = useState(0);
   const [sprint, setSprint] = useState<{ end: number; start: number; startChars: number } | null>(null);
@@ -568,6 +571,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   <button onClick={() => (close(), openSpell())}>맞춤법 검사 (F7)</button>
                   <button onClick={() => (close(), setTidy(true))}>줄바꿈 정리 (엔터 줄이기)</button>
                   <button onClick={() => (close(), setNameCheck(true))}>이름 표기 검사 (홍설 / 홍셜)</button>
+                  <button onClick={() => (close(), setTimeWords(true))}>시간 표현 모으기 (연표 후보)</button>
                   <button onClick={() => (close(), setJotPick(true))}>수첩에서 꺼내 넣기</button>
                   <hr />
                 </>
@@ -636,6 +640,24 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
       </header>
 
       {tidy && <TidyBreaks node={sel && sel.kind !== 'part' ? sel : null} nodes={ordered} onClose={() => setTidy(false)} onApply={(c) => applyChanges(c, '줄바꿈 정리 전')} />}
+      {timeWords && (
+        <TimeWords
+          nodes={ordered}
+          items={items}
+          hasWorld={!!book.world_id}
+          onClose={() => setTimeWords(false)}
+          onAdd={async (evs) => {
+            if (!book.world_id) throw new Error('먼저 책 설정에서 세계관을 연결해 주세요.');
+            await saveItems(book.world_id, evs);
+            setItems((x) => [...x, ...evs]);
+          }}
+          onOpen={(id, f) => {
+            setTimeWords(false);
+            select(id);
+            setTimeout(() => editor.current?.find(f), 250);
+          }}
+        />
+      )}
       {nameCheck && (
         <NameCheck
           bookId={bookId}
@@ -829,6 +851,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             }}
           />
         )}
+        {view === 'mood' && <MoodBoard bookId={bookId} />}
         {view === 'stats' && <BookStats book={book} nodes={live} onPatchBook={patchBook} onPatchNode={patchNode} />}
         {view === 'notes' && <BookNotes book={book} entries={refs} onSave={(notes) => patchBook({ notes })} />}
         {view === 'settings' && (

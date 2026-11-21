@@ -5,6 +5,7 @@ import { ago } from '../lib/text';
 import type { Book } from '../lib/types';
 import { confirmBox, Empty, Icon, Menu, Modal, Spinner, SubNav, toast, useAsync } from '../lib/ui';
 import { OutlineTool } from './Outline';
+import { JotWorld } from './JotWorld';
 import { isSeedJot, SEED_KINDS, SEEDS, seedJotText, seedOfDay, splitSeedJot, type SeedKind } from '../lib/seeds';
 
 export interface Jot {
@@ -111,6 +112,7 @@ export function JotsPage() {
   const [text, setText] = useState('');
   const [show, setShow] = useState<'open' | 'done'>('open');
   const [tab, setTab] = useState<'jots' | 'outline'>('jots');
+  const [worldFrom, setWorldFrom] = useState(false);
   const [edit, setEdit] = useState<Jot | null>(null);
   const { data, loading, reload, setData } = useAsync(async () => {
     const [j, b] = await Promise.all([api<{ jots: Jot[] }>('jots'), api<{ books: Book[] }>('books')]);
@@ -132,6 +134,7 @@ export function JotsPage() {
   };
   if (loading && !data) return <Spinner />;
   const jots = (data?.jots ?? []).filter((j) => (show === 'done' ? j.done : !j.done));
+  const seedJots = (data?.jots ?? []).filter((j) => isSeedJot(j.text) && splitSeedJot(j.text).a);
   return (
     <>
       <div className="page-head">
@@ -155,6 +158,15 @@ export function JotsPage() {
           ) : (
             <>
       <SeedCard recent={(data?.jots ?? []).filter((j) => isSeedJot(j.text)).slice(0, 6)} onSaved={reload} />
+      {seedJots.length > 0 && (
+        <p className="small" style={{ margin: '-8px 0 20px' }}>
+          답해 둔 질문 {seedJots.length}개 ·{' '}
+          <button className="link-btn" onClick={() => setWorldFrom(true)}>
+            수첩 답으로 세계관 만들기 (AI)
+          </button>
+        </p>
+      )}
+      {worldFrom && <JotWorld text={seedJots.slice(0, 40).map((j) => { const s = splitSeedJot(j.text); return `질문: ${s.q}\n답: ${s.a}`; }).join('\n\n')} count={Math.min(40, seedJots.length)} onClose={() => setWorldFrom(false)} />}
       <div className="panel stack" style={{ marginBottom: 24 }}>
         <textarea className="input serif" rows={3} placeholder="무엇이 떠올랐나요?" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && void add()} />
         <div className="row">

@@ -7,6 +7,8 @@ import { renderMd } from '../../lib/md';
 import { go } from '../../lib/router';
 import { fmtNum } from '../../lib/text';
 import { confirmBox, Empty, Icon, Menu, Modal, promptBox, Spinner, SubNav, toast } from '../../lib/ui';
+import { emptyFieldQuestions } from '../../lib/askfields';
+import { FieldAsk, Interview } from './EntryTools';
 import { DEFAULT_FIELDS, deleteItems, entriesOf, fieldsFor, KINDS, kindLabel, loadWorld, newItemId, REL_CATS, relColor, saveItems, type Entry, type EntryKind, type RelCat, type Relation, type Template, type Track, type WEvent, type WItem, type WorldData, parseBulk, toRefs } from '../../lib/world';
 import { Editor } from '../studio/Editor';
 import { shrinkImage } from '../../lib/image';
@@ -93,7 +95,7 @@ export function WorldView({ worldId, tab, entryId }: { worldId: string; tab?: st
         />
         <div style={{ minWidth: 0 }}>
           {t === 'entries' && !open && <EntryList items={items} ro={ro} worldId={worldId} onCreate={(e, stay) => (put(e, true), !stay && go(`worlds/${worldId}/entries/${e.id}`))} />}
-          {t === 'entries' && open && <EntryEditor key={open.id} entry={open} items={items} ro={ro} worldId={worldId} put={put} remove={remove} books={data.books} />}
+          {t === 'entries' && open && <EntryEditor key={open.id} entry={open} items={items} ro={ro} worldId={worldId} put={put} remove={remove} books={data.books} worldInfo={[data.world.title, data.world.summary].filter(Boolean).join(' — ')} />}
           {t === 'graph' && <Graph items={items} ro={ro} worldId={worldId} put={put} remove={remove} />}
           {t === 'maps' && <WorldMaps worldId={worldId} items={items} ro={ro} put={put} remove={remove} books={data.books} />}
           {t === 'timeline' && <Timeline items={items} ro={ro} put={put} remove={remove} books={data.books} />}
@@ -274,7 +276,8 @@ function EntryList({ items, ro, worldId, onCreate }: { items: WItem[]; ro: boole
 }
 
 // ---------------------------------------------------------------- 항목 편집
-function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry: Entry; items: WItem[]; ro: boolean; worldId: string; put: (i: WItem, now?: boolean) => void; remove: (ids: string[]) => void; books: { id: string; title: string }[] }) {
+function EntryEditor({ entry, items, ro, worldId, put, remove, books, worldInfo = '' }: { entry: Entry; items: WItem[]; ro: boolean; worldId: string; put: (i: WItem, now?: boolean) => void; remove: (ids: string[]) => void; books: { id: string; title: string }[]; worldInfo?: string }) {
+  const [tool, setTool] = useState<'' | 'interview' | 'ask'>('');
   const [e, setE] = useState(entry);
   const [origName] = useState(entry.name);
   const [imgBusy, setImgBusy] = useState(false);
@@ -314,6 +317,9 @@ function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry:
           <Menu label="항목 메뉴">
             {(close) => (
               <>
+                <button onClick={() => (close(), setTool('interview'))}>인터뷰 (AI가 이 인물이 되어 답해요)</button>
+                {emptyFieldQuestions(e, fieldsFor(items, e.kind)).length > 0 && <button onClick={() => (close(), setTool('ask'))}>빈칸 질문으로 채우기</button>}
+                <hr />
                 <button
                   onClick={() => {
                     close();
@@ -636,6 +642,8 @@ function EntryEditor({ entry, items, ro, worldId, put, remove, books }: { entry:
           )}
         </div>
       )}
+      {tool === 'interview' && <Interview entry={e} worldInfo={worldInfo} onClose={() => setTool('')} />}
+      {tool === 'ask' && <FieldAsk entry={e} fields={fields} onSave={(f, v) => upd({ fields: { ...e.fields, [f]: v } })} onClose={() => setTool('')} />}
     </div>
   );
 }

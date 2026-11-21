@@ -17,6 +17,7 @@ import { AnalysisPanel } from './AnalysisPanel';
 import { GoalPicker } from './GoalPicker';
 import { distributeGoal, goalLeaves, perPage } from '../../lib/goals';
 import { analyze } from '../../lib/analyze';
+import { forecast } from '../../lib/forecast';
 
 const STATUS_COLOR: Record<string, string> = { '': 'var(--line-strong)', idea: '#b9b2a3', draft: '#d9a441', revise: '#c26b4a', done: '#3f8a6c' };
 
@@ -207,6 +208,7 @@ export function BookStats({ book, nodes, onPatchBook, onPatchNode }: { book: Boo
   };
   const { data } = useAsync(() => api<{ days: { day: string; chars: number }[] }>('stats'), []);
   const days = useMemo(() => new Map((data?.days ?? []).map((d) => [d.day, d.chars])), [data]);
+  const bookDays = useAsync(() => api<{ days: { day: string; chars: number }[] }>(`books/${book.id}/daily`), [book.id]);
   const text = nodes.filter((n) => n.kind !== 'note' && n.kind !== 'part');
   const total = text.reduce((s, n) => s + charsNoSpace(n.body ?? ''), 0);
   const dailyGoal = Number(book.meta.dailyGoal ?? 0);
@@ -245,6 +247,7 @@ export function BookStats({ book, nodes, onPatchBook, onPatchNode }: { book: Boo
           </div>
         )}
       </div>
+      <ForecastPanel book={book} total={total} bookDays={bookDays.data?.days ?? []} allDays={data?.days ?? []} />
       <section className="panel stack">
         <h3 className="serif">목표</h3>
         <GoalPicker key={book.goal_chars} value={book.goal_chars} per={per.v} own={per.own} onChange={(v) => v !== book.goal_chars && onPatchBook({ goal_chars: v })} />
@@ -376,6 +379,18 @@ export function BookSettings({ book, nodes, onPatch, onWorldLinked }: { book: Bo
           지은이 (표지에 보이는 이름)
           <input className="input" defaultValue={book.author} onBlur={(e) => e.target.value !== book.author && onPatch({ author: e.target.value })} />
         </label>
+        {book.kind === 'write' && (
+          <div className="row wrap" style={{ gap: 12 }}>
+            <label className="field grow" style={{ minWidth: 180 }}>
+              시리즈 <span className="faint tiny">같은 이름의 책은 서재 책장에 한 덩어리로 꽂혀요</span>
+              <input className="input" defaultValue={String(book.meta.series ?? '')} placeholder="예: 소금 연대기" maxLength={40} onBlur={(e) => e.target.value.trim() !== String(book.meta.series ?? '') && onPatch({ meta: { ...book.meta, series: e.target.value.trim() } })} />
+            </label>
+            <label className="field" style={{ width: 90 }}>
+              몇 권째
+              <input className="input" type="number" min={1} max={99} defaultValue={Number(book.meta.seriesNo) || ''} onBlur={(e) => Number(e.target.value || 0) !== (Number(book.meta.seriesNo) || 0) && onPatch({ meta: { ...book.meta, seriesNo: Number(e.target.value) || 0 } })} />
+            </label>
+          </div>
+        )}
         <label className="field">
           책 소개 <span className="faint tiny">서재에서 책을 누르면 · 친구가 볼 때 보여요</span>
           <textarea className="input" rows={3} defaultValue={String(book.meta.blurb ?? '')} placeholder="뒤표지에 쓰는 짧은 소개" onBlur={(e) => e.target.value !== String(book.meta.blurb ?? '') && onPatch({ meta: { ...book.meta, blurb: e.target.value } })} />
@@ -825,6 +840,38 @@ function ChapterFlow({ nodes }: { nodes: BookNode[] }) {
           <span>{rows.length}장</span>
         </div>
       )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------- 완성 예측
+function ForecastPanel({ book, total, bookDays, allDays }: { book: Book; total: number; bookDays: { day: string; chars: number }[]; allDays: { day: string; chars: number }[] }) {
+  const since = new Date(Date.now() - 13 * 86_400_000).toLocaleDateString('sv-SE');
+  // 이 책 기록이 3일 넘게 쌓였으면 그걸로, 아니면 모든 책 합친 기록으로
+  const own = bookDays.filter((d) => d.day >= since && d.chars > 0).length >= 3;
+  const f = forecast(own ? bookDays : allDays, total, book.goal_chars, new Date(), book.deadline);
+  if (f == null) return book.goal_chars > 0 ? <p className="faint small">최근 14일에 쓴 글이 없어서 완성 날짜를 어림할 수 없어요. 며칠 쓰고 나면 보여 드려요.</p> : null;
+  if (f === 'done') return <p className="small">목표 분량 {fmtNum(book.goal_chars)}자를 채웠어요.</p>;
+  return (
+    <section className="panel stack">
+      <h3 className="serif">완성 예측</h3>
+      <p style={{ margin: 0, fontSize: 18 }} className="serif">
+        지금 속도라면 <b>{f.finish.replace(/-/g, '. ')}</b>쯤 목표에 닿아요 <span className="faint small">({f.days}일 뒤)</span>
+      </p>
+      <p className="muted small" style={{ margin: 0 }}>
+        남은 {fmtNum(f.remaining)}자 · 최근 14일 하루 평균 {fmtNum(f.perDay)}자(쓴 날 {f.activeDays}일, 쉰 날 포함한 평균){own ? '' : ' · 모든 책을 합친 기록이에요'}
+      </p>
+      {f.saved > 0 && (
+        <p className="small" style={{ margin: 0 }}>
+          하루 {fmtNum(f.extra)}자만 더 쓰면 <b>{f.saved}일</b> 당겨져요.
+        </p>
+      )}
+      {f.deadline && (
+        <p className={`small${f.deadline.onTrack ? '' : ' ages-warn'}`} style={{ margin: 0 }}>
+          마감({f.deadline.date})까지 {f.deadline.daysLeft}일 · 하루 {fmtNum(f.deadline.need)}자 필요 — {f.deadline.onTrack ? '지금 속도로 맞출 수 있어요.' : '지금 속도로는 마감을 넘길 것 같아요.'}
+        </p>
+      )}
+      <p className="faint tiny" style={{ margin: 0 }}>쓴 글자만 세요(지운 글자는 빼지 않아요). 어림이니 참고로만 봐 주세요.</p>
     </section>
   );
 }

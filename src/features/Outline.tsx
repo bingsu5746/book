@@ -32,9 +32,20 @@ export function outlineText(o: Outline): string {
 }
 
 const KEY = 'outlineDraft';
-const load = () => {
+const MAX_DRAFTS = 3;
+interface Saved {
+  idea: string;
+  tone: string;
+  drafts: Outline[];
+  cur: number;
+}
+const load = (): Saved | null => {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? 'null') as { idea: string; tone: string; outline: Outline | null } | null;
+    const v = JSON.parse(localStorage.getItem(KEY) ?? 'null') as (Partial<Saved> & { outline?: Outline | null }) | null;
+    if (!v) return null;
+    // 예전 모양(초안 하나)도 읽는다
+    const drafts = v.drafts ?? (v.outline ? [v.outline] : []);
+    return { idea: v.idea ?? '', tone: v.tone ?? '', drafts, cur: Math.min(v.cur ?? 0, Math.max(0, drafts.length - 1)) };
   } catch {
     return null;
   }
@@ -54,7 +65,10 @@ export function OutlineTool() {
   const [tone, setTone] = useState(saved?.tone ?? '');
   const [count, setCount] = useState(8);
   const [feedback, setFeedback] = useState('');
-  const [o, setO] = useState<Outline | null>(saved?.outline ?? null);
+  const [drafts, setDrafts] = useState<Outline[]>(saved?.drafts ?? []);
+  const [cur, setCur] = useState(saved?.cur ?? 0);
+  const [cmp, setCmp] = useState<[number, number] | null>(null);
+  const o: Outline | null = drafts[cur] ?? null;
   const [busy, setBusy] = useState(false);
   const [left, setLeft] = useState<number | null>(null);
   const [withWorld, setWithWorld] = useState(true);
@@ -65,11 +79,22 @@ export function OutlineTool() {
     setBusy(true);
     try {
       const r = await api<{ outline: Outline; left: number }>('ai/outline', { body: { idea, tone, chapters: count, feedback: again ? feedback : '', prev: again && o ? o.synopsis : '' } });
-      setO(r.outline);
+      // 다시 짜기(요청 반영)는 지금 초안을 바꾸고, 처음부터 짜기는 새 초안으로 더한다 (최대 3개, 넘치면 가장 오래된 것부터)
+      let next: Outline[];
+      let at: number;
+      if (again && o) {
+        next = drafts.map((d, i) => (i === cur ? r.outline : d));
+        at = cur;
+      } else {
+        next = [...drafts, r.outline].slice(-MAX_DRAFTS);
+        at = next.length - 1;
+      }
+      setDrafts(next);
+      setCur(at);
       setLeft(r.left);
       setSkip(new Set());
       if (again) setFeedback('');
-      store({ idea, tone, outline: r.outline });
+      store({ idea, tone, drafts: next, cur: at });
     } catch (e) {
       toast((e as Error).message, 'err');
     } finally {
@@ -78,9 +103,22 @@ export function OutlineTool() {
   };
   const patch = (p: Partial<Outline>) => {
     if (!o) return;
-    const next = { ...o, ...p };
-    setO(next);
-    store({ idea, tone, outline: next });
+    const next = drafts.map((d, i) => (i === cur ? { ...d, ...p } : d));
+    setDrafts(next);
+    store({ idea, tone, drafts: next, cur });
+  };
+  const pickDraft = (i: number) => {
+    setCur(i);
+    setSkip(new Set());
+    store({ idea, tone, drafts, cur: i });
+  };
+  const dropDraft = (i: number) => {
+    const next = drafts.filter((_, k) => k !== i);
+    const at = Math.min(cur >= i ? Math.max(0, cur - 1) : cur, Math.max(0, next.length - 1));
+    setDrafts(next);
+    setCur(at);
+    setCmp(null);
+    store({ idea, tone, drafts: next, cur: at });
   };
 
   const saveJot = async () => {
@@ -164,12 +202,76 @@ export function OutlineTool() {
         <div className="row">
           <button className="primary" disabled={busy || idea.replace(/\s/g, '').length < 10} onClick={() => run(false)}>
             <Icon name="pen" size={16} />
-            {busy && !feedback ? '짜는 중…' : o ? '처음부터 다시 짜기' : '줄거리 짜기'}
+            {busy && !feedback ? '짜는 중…' : o ? '새 초안으로 짜기' : '줄거리 짜기'}
           </button>
           {left != null && <span className="faint tiny">오늘 AI 를 {left}번 더 쓸 수 있어요.</span>}
         </div>
         {busy && <Spinner label="AI 가 줄거리를 짜는 중 (30초쯤 걸려요)" />}
       </section>
+
+      {drafts.length > 0 && !busy && (
+        <div className="row wrap" style={{ gap: 6 }}>
+          {drafts.map((d, i) => (
+            <button key={i} className={`chip${i === cur ? ' on' : ''}`} onClick={() => pickDraft(i)} title={d.logline}>
+              초안 {i + 1}
+              {d.title ? ` · ${d.title.slice(0, 10)}` : ''}
+            </button>
+          ))}
+          {drafts.length > 1 && (
+            <button className="small" onClick={() => setCmp(cmp ? null : [Math.max(0, cur - 1), cur])}>
+              나란히 비교
+            </button>
+          )}
+          <span className="faint tiny">초안은 3개까지 보관돼요. 「새 초안으로 짜기」는 초안을 더하고, 「이 방향으로 다시 짜기」는 지금 초안을 바꿔요.</span>
+        </div>
+      )}
+      {cmp && drafts.length > 1 && !busy && (
+        <section className="panel stack">
+          <div className="row wrap" style={{ gap: 8 }}>
+            <b className="small grow">초안 비교</b>
+            <button className="ghost small" onClick={() => setCmp(null)}>
+              닫기
+            </button>
+          </div>
+          <div className="tidy-preview">
+            {[0, 1].map((side) => (
+              <div key={side} className="stack" style={{ gap: 8 }}>
+                <select className="input" value={cmp[side]} onChange={(e) => setCmp(side ? [cmp[0], +e.target.value] : [+e.target.value, cmp[1]])} aria-label={side ? '오른쪽 초안' : '왼쪽 초안'}>
+                  {drafts.map((d, i) => (
+                    <option key={i} value={i}>
+                      초안 {i + 1} · {d.title || '가제 없음'}
+                    </option>
+                  ))}
+                </select>
+                {(() => {
+                  const d = drafts[cmp[side]] ?? drafts[0];
+                  return (
+                    <div className="ai-card">
+                      <b className="serif">{d.title}</b>
+                      <p className="small" style={{ margin: 0 }}>
+                        {d.logline}
+                      </p>
+                      <p className="small muted" style={{ margin: 0 }}>
+                        {d.synopsis}
+                      </p>
+                      {!!d.characters.length && <p className="tiny faint" style={{ margin: 0 }}>인물: {d.characters.map((c) => `${c.name}(${c.role})`).join(', ')}</p>}
+                      {!!d.chapters.length && <p className="tiny faint" style={{ margin: 0 }}>장: {d.chapters.map((c, i) => `${i + 1}. ${c.title}`).join(' · ')}</p>}
+                      <div className="row" style={{ gap: 6 }}>
+                        <button className="small" onClick={() => (pickDraft(cmp[side]), setCmp(null))}>
+                          이 초안으로 이어 가기
+                        </button>
+                        <button className="ghost small danger" onClick={() => dropDraft(cmp[side])}>
+                          버리기
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {o && !busy && (
         <>
