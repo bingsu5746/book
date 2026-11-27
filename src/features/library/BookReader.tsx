@@ -7,9 +7,8 @@ import { Modal } from '../../lib/ui';
 import { go } from '../../lib/router';
 import { loadFull, toReadNodes, type FullBook } from '../../lib/store';
 import { Spinner, toast } from '../../lib/ui';
-import { makeEpubWithCover } from '../../lib/epub';
-import { download } from '../../lib/exporters';
 import { Reader } from './Reader';
+import { ExportDialog } from '../ExportDialog';
 import { matterNodes } from '../../lib/matter';
 
 /** 내 책 읽기 (내가 쓴 책 · 들인 책). 받아 둔 사본이 있으면 인터넷 없이도 열린다 */
@@ -18,6 +17,7 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
   const [err, setErr] = useState('');
   const [entries, setEntries] = useState<EntryRef[]>([]);
   const [log, setLog] = useState(false);
+  const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (!data?.book.world_id) return;
     loadWorld(data.book.world_id)
@@ -89,9 +89,10 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
       onExit={() => (history.length > 1 ? history.back() : go('library'))}
       actions={[
         ...(data.book.kind === 'write' ? [{ label: '집필실에서 고치기', icon: 'pen', href: `#/write/${bookId}` }] : [{ label: '독서 기록', icon: 'star', onClick: () => setLog(true) }]),
-        { label: '전자책(EPUB)으로 받기', icon: 'download', onClick: async () => download(`${data.book.title}.epub`, new Blob([(await makeEpubWithCover(data.book, nodes, { breaks: data.book.kind === 'write' })) as BlobPart], { type: 'application/epub+zip' })) },
+        { label: '내보내기 (PDF · Word · 전자책 · 글 …)', icon: 'download', onClick: () => setExporting(true) },
       ]}
     />
+    {exporting && <ExportDialog bookId={bookId} onClose={() => setExporting(false)} />}
     {log && <ReadLog book={data.book} onClose={() => setLog(false)} onSave={(m) => (patchMeta(m), setLog(false))} />}
     </>
   );

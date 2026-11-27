@@ -221,3 +221,43 @@ describe('시리즈 묶기', () => {
     expect(seriesOf({})).toBeNull();
   });
 });
+
+import { unzipSync, strFromU8 } from 'fflate';
+import { makeDocx } from './docx';
+import { printCss } from './print';
+describe('Word · PDF 내보내기', () => {
+  it('docx: 제목 · 장 · 본문 · 장면 나눔, 글자는 이스케이프, 앞붙이 가운데', () => {
+    const z = unzipSync(makeDocx('새벽 <1>', '홍 & 설', [
+      { id: 'm-dedication', kind: 'scene', depth: 0, title: '', body: '엄마에게' },
+      { id: 'a', kind: 'chapter', depth: 0, title: '1장', body: '첫 줄.\n둘째 줄.\n\n**굵게** 둘째 문단.' },
+      { id: 'b', kind: 'scene', depth: 1, title: '', body: '장면 글.' },
+    ], { breaks: true }));
+    expect(Object.keys(z).sort()).toEqual(['[Content_Types].xml', '_rels/.rels', 'word/_rels/document.xml.rels', 'word/document.xml', 'word/styles.xml']);
+    const d = strFromU8(z['word/document.xml']);
+    expect(d).toContain('새벽 &lt;1&gt;');
+    expect(d).toContain('홍 &amp; 설');
+    expect(d).toContain('w:val="Heading2"');
+    expect(d).toContain('<w:br/>');
+    expect(d).toContain('굵게 둘째 문단.');
+    expect(d).not.toContain('**');
+    expect(d).toContain('*  *  *');
+    expect(d.indexOf('엄마에게')).toBeLessThan(d.indexOf('1장'));
+    expect(d.match(/<w:p>/g)!.length).toBeGreaterThan(5);
+  });
+  it('인쇄 CSS: 판형 · 글자 크기 · 쪽 번호', () => {
+    const c = printCss('sinkook', 11);
+    expect(c).toContain('size:152mm 225mm');
+    expect(c).toContain('11pt/1.85');
+    expect(c).toContain('counter(page)');
+    expect(printCss('A4', 10)).toContain('size:A4');
+  });
+});
+
+import { toMarkdown, toText } from './exporters';
+describe('앞붙이는 장면 나눔 표시 없이', () => {
+  it('txt · md 에 * 가 앞에 붙지 않는다', () => {
+    const n = [{ id: 'm-dedication', kind: 'scene' as const, depth: 0, title: '', body: '엄마에게' }, { id: 'a', kind: 'chapter' as const, depth: 0, title: '1장', body: '글' }];
+    expect(toText('책', '', n)).not.toMatch(/^\*$/m);
+    expect(toMarkdown('책', '', n)).not.toContain('***');
+  });
+});

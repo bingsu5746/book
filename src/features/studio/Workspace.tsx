@@ -1,11 +1,9 @@
 // 집필실 작업 화면: 왼쪽 원고 목록 · 가운데 편집기(또는 코르크보드 · 개요 · 통계 · 작가 노트 · 책 설정) · 오른쪽 곁 패널
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
-import { download, toHtml, toMarkdown, toText } from '../../lib/exporters';
-import { makeEpubWithCover } from '../../lib/epub';
 import { local } from '../../lib/idb';
 import { go } from '../../lib/router';
-import { flatten, loadFull, onSaveState, pushDraft, saveBody, toReadNodes, type FullBook } from '../../lib/store';
+import { flatten, loadFull, onSaveState, pushDraft, saveBody, type FullBook } from '../../lib/store';
 import { ago, charsNoSpace, charsWithSpace, fmtNum, manuscriptPages, plain } from '../../lib/text';
 import { deviceId, deviceLabel } from '../../lib/device';
 import { KIND_LABEL, type BookNode, type NodeKind } from '../../lib/types';
@@ -17,8 +15,8 @@ import { TidyBreaks } from './TidyBreaks';
 import { NameCheck } from './NameCheck';
 import { ClueLedger } from './ClueLedger';
 import { MoodBoard } from './MoodBoard';
+import { ExportDialog } from '../ExportDialog';
 import { TimeWords } from './TimeWords';
-import { matterNodes } from '../../lib/matter';
 import { SidePanel, type SideTab } from './SidePanel';
 import { BookNotes, BookSettings, BookStats, Corkboard, Outline } from './Views';
 import { FindReplace, PlotThreads, speak, speakSupported, stopSpeaking } from './StudioTools';
@@ -97,6 +95,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const [tidy, setTidy] = useState(false);
   const [nameCheck, setNameCheck] = useState(false);
   const [timeWords, setTimeWords] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [save, setSave] = useState({ pending: 0, error: null as string | null });
   const [selChars, setSelChars] = useState(0);
   const [sprint, setSprint] = useState<{ end: number; start: number; startChars: number } | null>(null);
@@ -463,11 +462,6 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const body = sel?.body ?? '';
   const written = sessionStart.current != null ? total - sessionStart.current : 0;
   const sprintLeft = sprint ? Math.max(0, sprint.end - now) : 0;
-  /** 내보낼 칸: 앞붙이 · 원고 · 뒷붙이 (plain: 글 · 마크다운용) */
-  const readNodes = (plain = false) => {
-    const m = matterNodes(book, { number: book.last_edition ?? undefined, date: new Date().toLocaleDateString('sv-SE') }, { plain });
-    return [...m.front, ...toReadNodes(data.nodes), ...m.back];
-  };
   const toggleSpeak = () => {
     if (speaking) {
       stopSpeaking();
@@ -515,13 +509,13 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
         </button>
         <button
           className="ghost small binder-btn"
-          title={(innerWidth <= 820 ? mobile === 'binder' : prefs.binder) ? '왼쪽 원고 목록(부 · 장) 닫기' : '왼쪽 원고 목록(부 · 장) 열기'}
+          title={(innerWidth <= 820 ? mobile === 'binder' : prefs.binder) ? '왼쪽의 원고 목록(부 · 장)을 접어요' : '왼쪽에 원고 목록(부 · 장)을 펼쳐요'}
           aria-label="원고 목록 열고 닫기"
           aria-pressed={innerWidth <= 820 ? mobile === 'binder' : prefs.binder}
           onClick={() => (innerWidth <= 820 ? setMobile(mobile === 'binder' ? '' : 'binder') : setPrefs({ binder: !prefs.binder }))}
         >
           <Icon name="panel" size={18} />
-          <span className="binder-label">목록</span>
+          <span className="binder-label">{(innerWidth <= 820 ? mobile === 'binder' : prefs.binder) ? '목록 접기' : '원고 목록'}</span>
         </button>
         <Menu label="보기 고르기" icon="layers" text={view === 'write' ? book.title : `${book.title} · ${VIEW_LABEL[view]}`} btnClass="book-name">
           {(close) => (
@@ -630,16 +624,14 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
               <hr />
               <button onClick={() => (close(), setHelp(true))}>단축키 보기</button>
               <hr />
-              <button onClick={async () => (close(), download(`${book.title}.epub`, new Blob([(await makeEpubWithCover(book, readNodes(), { breaks: book.kind === 'write' })) as BlobPart], { type: 'application/epub+zip' })))}>전자책(EPUB)으로 내보내기</button>
-              <button onClick={() => (close(), download(`${book.title}.md`, toMarkdown(book.title, book.author, readNodes(true)), 'text/markdown;charset=utf-8'))}>마크다운(.md)으로 내보내기</button>
-              <button onClick={() => (close(), download(`${book.title}.txt`, toText(book.title, book.author, readNodes(true))))}>글(.txt)로 내보내기</button>
-              <button onClick={() => (close(), download(`${book.title}.html`, toHtml(book.title, book.author, readNodes(), { breaks: book.kind === 'write' }), 'text/html;charset=utf-8'))}>인쇄용 HTML 로 내보내기</button>
+              <button onClick={async () => (close(), sel && (await flush(sel.id)), setExporting(true))}>내보내기 (PDF · Word · 전자책 · 글 …)</button>
             </>
           )}
         </Menu>
       </header>
 
       {tidy && <TidyBreaks node={sel && sel.kind !== 'part' ? sel : null} nodes={ordered} onClose={() => setTidy(false)} onApply={(c) => applyChanges(c, '줄바꿈 정리 전')} />}
+      {exporting && <ExportDialog bookId={bookId} onClose={() => setExporting(false)} />}
       {timeWords && (
         <TimeWords
           nodes={ordered}

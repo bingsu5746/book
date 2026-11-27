@@ -13,6 +13,7 @@ import { ago } from '../../lib/text';
 import type { Book } from '../../lib/types';
 import { confirmBox, Icon, Menu, Spinner, toast, useAsync } from '../../lib/ui';
 import { ImportDialog } from './ImportDialog';
+import { ExportDialog } from '../ExportDialog';
 import { BookSheet, type SheetBook } from './BookSheet';
 import { go } from '../../lib/router';
 
@@ -53,6 +54,7 @@ export function LibraryHome() {
   const [backupHidden, setBackupHidden] = useState(false);
   const [readFilter, setReadFilter] = useState<'' | 'want' | 'reading' | 'done'>('');
   const [sheet, setSheet] = useState<{ book: SheetBook; from: HTMLElement | null } | null>(null);
+  const [exportId, setExportId] = useState<string | null>(null);
   useEffect(() => {
     api<{ read: { day: string; secs: number }[] }>('stats')
       .then((r) => {
@@ -140,7 +142,7 @@ export function LibraryHome() {
       if (b.kind === 'write') {
         const blurb = String(b.meta.blurb ?? '').trim();
         const plot = String(b.meta.plot ?? '').trim();
-        return { ...base, writeHref: `#/write/${b.id}`, blurb: blurb || plot, blurbLabel: blurb ? '소개' : '구상 줄거리 · 나만 보여요', facts: [seriesOf(b.meta) ? `${seriesOf(b.meta)!.name}${seriesOf(b.meta)!.no ? ` ${seriesOf(b.meta)!.no}권` : ''}` : '', charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', `${ago(b.updated)} 고침`] };
+        return { ...base, actions: [{ label: '내보내기', onClick: () => setExportId(b.id) }], writeHref: `#/write/${b.id}`, blurb: blurb || plot, blurbLabel: blurb ? '소개' : '구상 줄거리 · 나만 보여요', facts: [seriesOf(b.meta) ? `${seriesOf(b.meta)!.name}${seriesOf(b.meta)!.no ? ` ${seriesOf(b.meta)!.no}권` : ''}` : '', charsLabel(b.total_chars), `${b.node_count ?? 0}장`, b.shared ? (b.last_edition ? `${b.last_edition}판 공유 중` : '공유 중') : '', `${ago(b.updated)} 고침`] };
       }
       const st = b.meta.readStatus === 'done' ? `다 읽음${b.meta.finishedAt ? ` ${b.meta.finishedAt}` : ''}` : b.meta.readStatus === 'want' ? '읽고 싶어요' : '';
       return {
@@ -148,6 +150,7 @@ export function LibraryHome() {
         blurb: String(b.meta.blurb ?? '').trim(),
         facts: [st, b.meta.readStars ? '★'.repeat(b.meta.readStars) : '', charsLabel(b.total_chars)],
         actions: [
+          { label: '내보내기', onClick: () => setExportId(b.id) },
           {
             label: '집필실에서 고치기',
             onClick: async () => {
@@ -369,6 +372,7 @@ export function LibraryHome() {
           }}
         />
       )}
+      {exportId && <ExportDialog bookId={exportId} onClose={() => setExportId(null)} />}
       {sheet && <BookSheet book={sheet.book} from={sheet.from} onClose={() => setSheet(null)} />}
     </div>
   );

@@ -40,6 +40,12 @@ export function makeEpub(book: { title: string; author: string; id: string; colo
   const chapters: { id: string; title: string; level: number; html: string }[] = [];
   let lastKind = '';
   for (const n of nodes) {
+    if (n.id.startsWith('m-') && n.kind === 'scene') {
+      // 헌사 · 판권면: 제목 없이 한 쪽으로 (목차에는 이름만)
+      chapters.push({ id: `c${chapters.length + 1}`, title: n.id === 'm-dedication' ? '헌사' : '판권', level: 2, html: toXhtml(renderMd(n.body, opts)) });
+      lastKind = 'part';
+      continue;
+    }
     if (n.kind === 'part') {
       chapters.push({ id: `c${chapters.length + 1}`, title: n.title, level: 1, html: `<h1>${esc(n.title)}</h1>\n${n.body.trim() ? toXhtml(renderMd(n.body, opts)) : ''}` });
     } else if (n.kind === 'chapter' || !chapters.length || lastKind === 'part') {
