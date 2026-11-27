@@ -14,11 +14,13 @@ const RECAP_AFTER = 3 * 86_400_000;
 import { highlightRange, rangeOffsets } from '../../lib/anchor';
 import { speak, speakSupported, stopSpeaking } from '../studio/StudioTools';
 import type { EntryRef } from '../studio/Editor';
+import { faceCss, isFace, loadReaderFace } from '../../lib/readerFonts';
+import { FACES, type FaceId } from '../../lib/typeset/settings';
 
 export interface ReaderPrefs {
   fs: number;
   lh: number;
-  font: 'serif' | 'sans';
+  font: 'serif' | 'sans' | FaceId;
   theme: 'paper' | 'sepia' | 'dark';
   mode: 'page' | 'scroll';
   spread: 'auto' | 'one';
@@ -40,7 +42,11 @@ export interface ReaderAction {
   onClick?: () => void;
   href?: string;
 }
-export const loadPrefs = (): ReaderPrefs => ({ ...DEFAULT, ...local.get<Partial<ReaderPrefs>>('reader', {}) });
+export const loadPrefs = (): ReaderPrefs => {
+  const p = { ...DEFAULT, ...local.get<Partial<ReaderPrefs>>('reader', {}) };
+  if (p.font !== 'serif' && p.font !== 'sans' && !isFace(p.font)) p.font = 'serif';
+  return p;
+};
 
 interface Bookmark {
   id: string;
@@ -94,6 +100,32 @@ export function Reader({
 }) {
   const canMark = !!progressKey && !localOnly;
   const [prefs, setPrefsState] = useState<ReaderPrefs>(loadPrefs);
+  // 고른 글꼴이 책 글꼴이면 받아 두고, 받으면 쪽을 다시 나눈다 (글자 너비가 달라서)
+  const [fontTick, setFontTick] = useState(0);
+  const [fontBusy, setFontBusy] = useState(false);
+
+  useEffect(() => {
+    const f = prefs.font;
+    if (!isFace(f)) return;
+    let live = true;
+    setFontBusy(true);
+    loadReaderFace(f)
+      .then(() => live && setFontTick((t) => t + 1))
+      .catch(() => {
+        if (!live) return;
+        toast(`${FACES[f].name} 글꼴을 받지 못했어요. 인터넷 연결을 확인해 주세요. 기본 글꼴로 보여 드려요.`, 'err');
+        setPrefsState((old) => {
+          const v = { ...old, font: 'serif' as const };
+          local.set('reader', v);
+          return v;
+        });
+      })
+      .finally(() => live && setFontBusy(false));
+    return () => {
+      live = false;
+    };
+  }, [prefs.font]);
+
   const setPrefs = (p: Partial<ReaderPrefs>) =>
     setPrefsState((old) => {
       const v = { ...old, ...p };
@@ -312,7 +344,7 @@ export function Reader({
   useLayoutEffect(() => {
     if (mode !== 'page' || !ready) return;
     layout();
-  }, [mode, ready, layout, prefs.fs, prefs.lh, prefs.font, prefs.margin]);
+  }, [mode, ready, layout, prefs.fs, prefs.lh, prefs.font, prefs.margin, fontTick]);
   useEffect(() => {
     if (mode !== 'page') return;
     let t = 0;
@@ -667,7 +699,7 @@ export function Reader({
     <div
       ref={rootRef}
       className={`reader t-${prefs.theme}${prefs.font === 'sans' ? ' f-sans' : ''}${chrome ? '' : ' chrome-off'} m-${prefs.margin}`}
-      style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh) }}
+      style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh), ...(isFace(prefs.font) ? { ['--rfont' as string]: faceCss(prefs.font) } : {}) }}
     >
       <div className="r-bar" onPointerMove={poke}>
         <button className="icon-btn" onClick={onExit} aria-label="닫기">
@@ -796,14 +828,16 @@ export function Reader({
           </div>
           <div className="opt">
             글꼴
-            <div className="seg">
-              <button className={prefs.font === 'serif' ? 'on' : ''} onClick={() => setPrefs({ font: 'serif' })}>
-                명조
-              </button>
-              <button className={prefs.font === 'sans' ? 'on' : ''} onClick={() => setPrefs({ font: 'sans' })}>
-                고딕
-              </button>
-            </div>
+            <select className="input" value={prefs.font} onChange={(e) => setPrefs({ font: e.target.value as ReaderPrefs['font'] })} style={{ maxWidth: 190 }}>
+              <option value="serif">기본 명조</option>
+              <option value="sans">기본 고딕</option>
+              {(Object.entries(FACES) as [FaceId, (typeof FACES)[FaceId]][]).map(([id, f]) => (
+                <option key={id} value={id}>
+                  {f.name} ({f.kind} · {f.mbR}MB)
+                </option>
+              ))}
+            </select>
+            {fontBusy && <span className="faint tiny">글꼴 받는 중… (처음 한 번)</span>}
           </div>
           <div className="opt">
             바탕

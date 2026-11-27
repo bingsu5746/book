@@ -167,3 +167,36 @@ function nodes2() {
     { id: 'c2', kind: 'chapter', title: '2장 **정원**', body: para.repeat(10) },
   ];
 }
+
+describe('장 시작 서식', () => {
+  const ch = [{ id: 'c1', kind: 'chapter', title: '3장 바람이 불다', body: '첫 문단입니다.\n\n둘째 문단입니다.' }];
+  const heading = (o: object) => {
+    const sections = toSections(ch, true);
+    const r = layoutBook(sections, metricsOf(fonts), { ...opts, multipleOf4: false, ...o });
+    const pg = r.pages.find((p) => p.kind === 'chapter')!;
+    return { pg, texts: pg.items.filter((i) => i.k === 't').map((i) => (i as { text: string }).text) };
+  };
+  it('번호를 떼어 윗줄에 따로 쓴다', async () => {
+    const { splitChapterTitle } = await import('./layout');
+    expect(splitChapterTitle('1장 바람')).toEqual({ n: 1, unit: '장', name: '바람' });
+    expect(splitChapterTitle('제12장 - 숲')).toEqual({ n: 12, unit: '장', name: '숲' });
+    expect(splitChapterTitle('3. 정원')).toEqual({ n: 3, unit: '장', name: '정원' });
+    expect(splitChapterTitle('바람')).toBeNull();
+    expect(heading({ chapterNumber: 'plain' }).texts.slice(0, 3)).toEqual(['3', '바람이', '불다']);
+    expect(heading({ chapterNumber: 'je' }).texts.slice(0, 3)).toEqual(['제3장', '바람이', '불다']);
+    expect(heading({}).texts.slice(0, 3)).toEqual(['3장', '바람이', '불다']);
+  });
+  it('왼쪽 정렬은 짧은 선이 붙고, 낮추면 더 아래에서 시작한다', () => {
+    const left = heading({ chapterAlign: 'left' });
+    expect(left.pg.items.some((i) => i.k === 'rule')).toBe(true);
+    const y = (h: ReturnType<typeof heading>) => (h.pg.items.find((i) => i.k === 't') as { y: number }).y;
+    expect(y(heading({ chapterDrop: 'low' }))).toBeGreaterThan(y(heading({})));
+  });
+  it('첫 문단 들여쓰기를 끌 수 있다', () => {
+    const x = (o: object) => {
+      const items = heading(o).pg.items.filter((i) => i.k === 't') as { x: number; text: string }[];
+      return items.find((i) => i.text.startsWith('첫'))!.x;
+    };
+    expect(x({ firstIndent: false })).toBeLessThan(x({}));
+  });
+});

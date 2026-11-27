@@ -25,9 +25,25 @@ export interface PrintOptions {
   noteStyle: NoteStyle;
   /** 전체 쪽수를 4의 배수로 (제본에 맞춰 빈 쪽을 판권면 앞에) */
   multipleOf4: boolean;
+  /** 장 제목 서식 (없으면 가운데 · 글에 쓴 그대로 · 첫 문단 들여쓰기) */
+  chapterAlign?: 'center' | 'left';
+  /** low: 제목을 쪽 위에서 더 아래(약 3분의 1 지점)에서 시작 */
+  chapterDrop?: 'normal' | 'low';
+  /** 「1장 바람」 같은 제목에서 번호를 떼어 윗줄에 따로: plain = 1, je = 제1장 */
+  chapterNumber?: 'asis' | 'plain' | 'je';
+  firstIndent?: boolean;
   title: string;
   subtitle?: string;
   author: string;
+}
+
+/** 「1장 바람」 · 「제1장 바람」 · 「3. 바람」 에서 번호와 이름을 가른다 (그런 모양이 아니면 null) */
+export function splitChapterTitle(t: string): { n: number; unit: string; name: string } | null {
+  const a = t.match(/^\s*(?:제\s*)?(\d{1,3})\s*(장|화)\s*[.:·\-–—]?\s*(.*)$/);
+  if (a) return { n: Number(a[1]), unit: a[2], name: a[3].trim() };
+  const b = t.match(/^\s*(\d{1,3})\s*[.)]\s+(.*)$/);
+  if (b) return { n: Number(b[1]), unit: '장', name: b[2].trim() };
+  return null;
 }
 
 /** 글자 너비 (글자 크기 1 기준) */
@@ -501,10 +517,27 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
       const c = newPage('chapter');
       const inPart = toc.some((t) => t.level === 0) && !s.id.startsWith('m-');
       toc.push({ id: s.id, title: s.title || '제목 없음', level: inPart ? 1 : 0, page: c.page.n });
-      c.y = g.textH * 0.18;
-      if (s.title) centered(c, s.title, g.size * 1.45, true, g.size * 1.45 * 1.5);
+      c.y = g.textH * (o.chapterDrop === 'low' ? 0.3 : 0.18);
+      if (s.title) {
+        const left = o.chapterAlign === 'left';
+        const line = (text: string, size: number, bold: boolean) => {
+          for (const l of breakLines([{ text, bold }], g.textW, size, ms, { center: !left })) drawLine(c, l, size, size * 1.5, bold);
+        };
+        const sp = o.chapterNumber && o.chapterNumber !== 'asis' ? splitChapterTitle(s.title) : null;
+        if (sp) {
+          line(o.chapterNumber === 'je' ? `제${sp.n}${sp.unit}` : String(sp.n), g.size * 1.15, false);
+          if (sp.name) {
+            c.y += g.lead * 0.3;
+            line(sp.name, g.size * 1.45, true);
+          }
+        } else line(s.title, g.size * 1.45, true);
+        if (left) {
+          c.y += g.lead * 0.3;
+          c.page.items.push({ k: 'rule', x: c.x0, y: g.top + c.y, w: g.size * 3, t: 0.5 });
+        }
+      }
       c.y += g.lead * 1.6;
-      placeBlocks(s.blocks);
+      placeBlocks(o.firstIndent === false ? s.blocks.map((b, i) => (i === 0 && b.t === 'p' ? { ...b, indent: false } : b)) : s.blocks);
       continue;
     }
     if (s.kind === 'colophon') {

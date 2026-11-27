@@ -167,6 +167,49 @@ export function ExportDialog({ bookId, onClose }: { bookId: string; onClose: () 
                   </div>
                 </div>
               </div>
+              <div className="row wrap" style={{ gap: 12 }}>
+                <div className="field">
+                  장 제목 위치
+                  <div className="seg">
+                    <button className={ps.chapterAlign === 'center' ? 'on' : ''} onClick={() => setP({ chapterAlign: 'center' })}>
+                      가운데
+                    </button>
+                    <button className={ps.chapterAlign === 'left' ? 'on' : ''} onClick={() => setP({ chapterAlign: 'left' })}>
+                      왼쪽 + 짧은 선
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  장 시작 높이
+                  <div className="seg">
+                    <button className={ps.chapterDrop === 'normal' ? 'on' : ''} onClick={() => setP({ chapterDrop: 'normal' })}>
+                      위쪽
+                    </button>
+                    <button className={ps.chapterDrop === 'low' ? 'on' : ''} onClick={() => setP({ chapterDrop: 'low' })}>
+                      아래로 내려서
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  장 번호 (「1장 바람」 꼴 제목)
+                  <div className="seg">
+                    {(
+                      [
+                        ['asis', '쓴 그대로'],
+                        ['plain', '1 / 바람'],
+                        ['je', '제1장 / 바람'],
+                      ] as const
+                    ).map(([id, l]) => (
+                      <button key={id} className={ps.chapterNumber === id ? 'on' : ''} onClick={() => setP({ chapterNumber: id })}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <label className="check">
+                <input type="checkbox" checked={ps.firstIndent} onChange={(e) => setP({ firstIndent: e.target.checked })} />장 첫 문단도 들여쓰기 (끄면 첫 문단만 붙여서 시작)
+              </label>
               <label className="check">
                 <input type="checkbox" checked={ps.rightStart} onChange={(e) => setP({ rightStart: e.target.checked })} />장 · 부를 오른쪽(홀수) 쪽에서 시작 (책에서 흔한 방식, 필요하면 빈 쪽을 넣어요)
               </label>

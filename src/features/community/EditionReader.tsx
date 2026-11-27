@@ -12,6 +12,7 @@ import { ago, fmtDate } from '../../lib/text';
 import type { ReadNode } from '../../lib/types';
 import { confirmBox, Icon, Menu, Modal, Spinner, toast } from '../../lib/ui';
 import { loadPrefs, Reader } from '../library/Reader';
+import { faceCss, isFace, loadReaderFace } from '../../lib/readerFonts';
 
 interface Anno {
   id: string;
@@ -59,6 +60,10 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
       .catch(() => {});
   }, [d?.book.world_id]);
   const prefs = loadPrefs();
+  const [, setFontTick] = useState(0);
+  useEffect(() => {
+    if (isFace(prefs.font)) loadReaderFace(prefs.font).then(() => setFontTick((t) => t + 1)).catch(() => {});
+  }, [prefs.font]);
   const col = useRef<HTMLDivElement>(null);
   const sc = useRef<HTMLDivElement>(null);
 
@@ -237,7 +242,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
   const isLatest = d.editions[0]?.id === d.edition.id;
 
   return (
-    <div className={`reader t-${prefs.theme}${prefs.font === 'sans' ? ' f-sans' : ''}`} style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh) }}>
+    <div className={`reader t-${prefs.theme}${prefs.font === 'sans' ? ' f-sans' : ''}`} style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh), ...(isFace(prefs.font) ? { ['--rfont' as string]: faceCss(prefs.font) } : {}) }}>
       <div className="r-bar">
         <button className="icon-btn" onClick={() => (history.length > 1 ? history.back() : go('hall'))} aria-label="닫기">
           <Icon name="back" />
