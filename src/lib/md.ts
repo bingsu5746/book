@@ -1,5 +1,6 @@
 // 마크다운 → 화면에 넣을 HTML (위험한 태그 · 속성 제거)
 import { Marked } from 'marked';
+import { extractNotes, NOTE_REF, noteLabel } from './footnotes';
 
 const marked = new Marked({ gfm: true, breaks: false });
 /** 내가 쓴 책: 한 번 친 엔터도 줄바꿈으로 (집필실에서 본 그대로) */
@@ -14,10 +15,24 @@ export interface RenderOpts {
   breaks?: boolean;
 }
 
+/** 주석: 낱말 옆 [^1] 은 위첨자 * 로, [^1]: 설명 줄은 장 끝 주석 목록으로 */
+function footnotes(md: string): string {
+  const { body, notes } = extractNotes(md);
+  if (!notes.size) return md;
+  const used: string[] = [];
+  const out = body.replace(NOTE_REF, (m, id: string) => {
+    if (!notes.has(id)) return m;
+    let i = used.indexOf(id);
+    if (i < 0) i = used.push(id) - 1;
+    return `<sup class="fn" data-note="${esc(notes.get(id)!)}">${noteLabel(i + 1)}</sup>`;
+  });
+  if (!used.length) return out;
+  return `${out.trimEnd()}\n\n<div class="footnotes">${used.map((id, i) => `<p><span class="fn-mark">${noteLabel(i + 1)}</span> ${esc(notes.get(id)!)}</p>`).join('')}</div>\n`;
+}
+
 /** 원고 안 표시를 리더용으로 바꾼다: %%작가 메모%% 는 지우고, [[이름|보일 말]] 은 보일 말로 */
 export function preprocess(md: string, opts: RenderOpts = {}): string {
-  return md
-    .replace(/%%[\s\S]*?%%/g, '')
+  return footnotes(md.replace(/%%[\s\S]*?%%/g, ''))
     .replace(/\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]/g, (_, name: string, label?: string) =>
       opts.links ? `<span class="wl" data-entry="${esc(name.trim())}">${esc((label ?? name).trim())}</span>` : (label ?? name),
     );
@@ -34,9 +49,27 @@ export function sanitize(html: string): string {
     }),
   );
   d.querySelectorAll('img').forEach((img) => {
-    // 원고 안 그림은 밖의 주소만 (내 서버 주소로 무언가를 부르지 않게)
-    if (!/^https:\/\//.test(img.getAttribute('src') ?? '')) img.remove();
-    else img.setAttribute('loading', 'lazy');
+    // 원고 안 그림은 밖의 https 주소, 또는 이 책에 올린 사진(/api/bimg/…)만
+    const src = img.getAttribute('src') ?? '';
+    if (!/^https:\/\//.test(src) && !/^\/api\/bimg\/[a-z0-9]+$/.test(src)) return img.remove();
+    img.setAttribute('loading', 'lazy');
+    // 「1200x800」 제목은 그림 크기: 미리 자리를 잡아 쪽 나눔이 흔들리지 않게
+    const m = (img.getAttribute('title') ?? '').match(/^(\d+)x(\d+)$/);
+    if (m) {
+      img.setAttribute('width', m[1]);
+      img.setAttribute('height', m[2]);
+      img.removeAttribute('title');
+    }
+    img.classList.add('ms-img');
+    const p = img.parentElement;
+    if (p?.tagName === 'P' && p.childNodes.length === 1) p.classList.add('figure');
+    const alt = img.getAttribute('alt');
+    if (alt && p?.classList.contains('figure')) {
+      const cap = document.createElement('span');
+      cap.className = 'caption';
+      cap.textContent = alt;
+      p.appendChild(cap);
+    }
   });
   d.querySelectorAll('a').forEach((a) => {
     a.setAttribute('rel', 'noopener noreferrer');

@@ -15,6 +15,11 @@ import { TidyBreaks } from './TidyBreaks';
 import { NameCheck } from './NameCheck';
 import { ClueLedger } from './ClueLedger';
 import { MoodBoard } from './MoodBoard';
+import { TocView } from './TocView';
+import { nextNoteId } from '../../lib/footnotes';
+import { shrinkImage } from '../../lib/image';
+import { applyFixes, findTraces } from '../../lib/traces';
+import { countBreaks, tidyBreaks } from '../../lib/linebreaks';
 import { ExportDialog } from '../ExportDialog';
 import { TimeWords } from './TimeWords';
 import { SidePanel, type SideTab } from './SidePanel';
@@ -26,10 +31,10 @@ import { infoGaps, mergeInfo, shouldAutoFill, type ChapterInfo } from '../../lib
 import { dictationSupported, startDictation } from '../../lib/dictate';
 import { JotPicker } from '../Jots';
 
-type View = 'plan' | 'write' | 'cork' | 'outline' | 'threads' | 'clues' | 'mood' | 'replace' | 'stats' | 'notes' | 'settings';
-const VIEWS: View[] = ['plan', 'write', 'cork', 'outline', 'threads', 'clues', 'mood', 'replace', 'stats', 'notes', 'settings'];
-const VIEW_LABEL: Record<View, string> = { plan: '구상 (줄거리 먼저)', write: '원고', cork: '코르크보드', outline: '개요', threads: '플롯 선', clues: '복선 장부', mood: '무드보드', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
-const VIEW_ICON: Record<View, string> = { plan: 'note', write: 'pen', cork: 'grid', outline: 'layers', threads: 'share', clues: 'link', mood: 'eye', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
+type View = 'plan' | 'write' | 'toc' | 'cork' | 'outline' | 'threads' | 'clues' | 'mood' | 'replace' | 'stats' | 'notes' | 'settings';
+const VIEWS: View[] = ['plan', 'write', 'toc', 'cork', 'outline', 'threads', 'clues', 'mood', 'replace', 'stats', 'notes', 'settings'];
+const VIEW_LABEL: Record<View, string> = { plan: '구상 (줄거리 먼저)', write: '원고', toc: '목차 (쪽수 자동)', cork: '코르크보드', outline: '개요', threads: '플롯 선', clues: '복선 장부', mood: '무드보드', replace: '찾아 바꾸기', stats: '통계', notes: '작가 노트', settings: '책 설정' };
+const VIEW_ICON: Record<View, string> = { plan: 'note', write: 'pen', toc: 'list', cork: 'grid', outline: 'layers', threads: 'share', clues: 'link', mood: 'eye', replace: 'search', stats: 'chart', notes: 'note', settings: 'settings' };
 interface WsPrefs {
   binder: boolean;
   side: boolean;
@@ -96,6 +101,48 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
   const [nameCheck, setNameCheck] = useState(false);
   const [timeWords, setTimeWords] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [pasted, setPasted] = useState<{ from: number; to: number; text: string; breaks: boolean; marks: boolean } | null>(null);
+  /** 커서 자리에 주석 달기: 낱말 옆에 [^n], 장 끝에 「[^n]: 설명」 */
+  const addNote = async () => {
+    const v = editor.current?.view;
+    if (!v) return;
+    const at = v.state.selection.main.to;
+    const text = await promptBox('주석 설명', '', { placeholder: '이 낱말 · 문장에 붙일 설명 (책에서는 * 와 함께 그 쪽 아래에 나와요)', ok: '달기', multiline: true });
+    if (!text?.trim()) return;
+    const doc = v.state.doc.toString();
+    const id = nextNoteId(doc);
+    const tail = `${doc.endsWith('\n\n') ? '' : doc.endsWith('\n') ? '\n' : '\n\n'}[^${id}]: ${text.trim().replace(/\s*\n\s*/g, ' ')}`;
+    v.dispatch({ changes: [{ from: at, insert: `[^${id}]` }, { from: doc.length, insert: tail }], selection: { anchor: at + `[^${id}]`.length } });
+    v.focus();
+  };
+  /** 커서 자리에 사진 넣기 */
+  const addPhoto = async (file?: File) => {
+    if (!file || !sel) return;
+    setPhotoBusy(true);
+    try {
+      const img = await shrinkImage(file, 2000, 0.9, true);
+      const r = await api<{ id: string }>(`books/${bookId}/bimgs`, { body: { mime: img.mime, data: img.data, w: img.w, h: img.h } });
+      const cap = (await promptBox('사진 설명 (선택)', '', { placeholder: '사진 아래에 작게 나와요. 비워 두어도 돼요.', ok: '넣기' })) ?? '';
+      editor.current?.insertLine(`![${cap.replace(/[\[\]\n]/g, ' ').trim()}](/api/bimg/${r.id} "${img.w}x${img.h}")`);
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+  /** 붙여넣은 글 정리: 붙여넣은 그 자리만, 그사이 고치지 않았을 때 */
+  const tidyPasted = (breaks: boolean, marks: boolean) => {
+    const v = editor.current?.view;
+    const p = pasted;
+    setPasted(null);
+    if (!v || !p || v.state.sliceDoc(p.from, p.to) !== p.text) return toast('그사이 글이 바뀌어서 정리하지 않았어요.', 'err');
+    let t = p.text;
+    if (marks) t = applyFixes(t, findTraces(t).filter((x) => x.fix !== undefined && (x.kind === 'md' || x.kind === 'quote')));
+    if (breaks) t = tidyBreaks(t, 'all', { dialogue: true });
+    v.dispatch({ changes: { from: p.from, to: p.to, insert: t } });
+    toast('정리했어요. 되돌리려면 Ctrl+Z.');
+  };
   const [save, setSave] = useState({ pending: 0, error: null as string | null });
   const [selChars, setSelChars] = useState(0);
   const [sprint, setSprint] = useState<{ end: number; start: number; startChars: number } | null>(null);
@@ -718,6 +765,15 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
             <>
               <div className="ed-head row reveal-wrap">
                 <input className="grow" key={sel.id} defaultValue={sel.title} placeholder={`${KIND_LABEL[sel.kind]} 제목`} aria-label="제목" onBlur={(e) => e.target.value !== sel.title && patchNode(sel.id, { title: e.target.value })} />
+                <label className="quiet-btn" title="커서 자리에 사진 넣기 (리더 · 전자책 · 인쇄용 PDF 에 들어가요)">
+                  <Icon name="upload" size={15} />
+                  {photoBusy ? '올리는 중…' : '사진'}
+                  <input type="file" accept="image/*" hidden disabled={photoBusy} onChange={(e) => (void addPhoto(e.target.files?.[0]), (e.target.value = ''))} />
+                </label>
+                <button className="quiet-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => void addNote()} title="커서 자리(고른 글 끝)에 주석 * 달기 — 설명은 쪽 아래 · 장 끝에 나와요">
+                  <span aria-hidden="true">*</span>
+                  주석
+                </button>
                 <button className="quiet-btn reveal" onClick={openSpell} title="맞춤법 검사 (F7)">
                   <Icon name="check" size={15} />
                   맞춤법
@@ -749,6 +805,9 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   <button onClick={() => editor.current?.wrap('> ', '')} title="인용">
                     인용
                   </button>
+                  <button onClick={() => void addNote()} title="고른 글 끝에 주석 * 달기">
+                    주석
+                  </button>
                 </div>
               )}
               <Editor
@@ -758,6 +817,10 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                 onChange={(d) => onBody(sel.id, d)}
                 onSelection={setSelChars}
                 onSelectRect={setBubble}
+                onPasted={(from, to, text) => {
+                  const h = pasteIssues(text);
+                  if (h.breaks || h.marks) setPasted({ from, to, text, ...h });
+                }}
                 onCursor={(pos, doc) => {
                   const b = beatAt(doc, pos);
                   setCurBeat((old) => (b ? (old && old.text === b.beat.text && old.index === b.index && old.total === b.total ? old : { text: b.beat.text, index: b.index, total: b.total }) : null));
@@ -774,6 +837,31 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
                   else void createEntry(name);
                 }}
               />
+              {pasted && (
+                <div className="paste-hint" role="status">
+                  <span className="grow small">
+                    붙여넣은 글에 {[pasted.breaks && '엔터가 많아요', pasted.marks && '**, # 같은 기호가 있어요'].filter(Boolean).join(' · ')}. 정리할까요?
+                  </span>
+                  {pasted.breaks && (
+                    <button className="small" onClick={() => tidyPasted(true, false)}>
+                      줄바꿈 정리
+                    </button>
+                  )}
+                  {pasted.marks && (
+                    <button className="small" onClick={() => tidyPasted(false, true)}>
+                      기호 정리
+                    </button>
+                  )}
+                  {pasted.breaks && pasted.marks && (
+                    <button className="small primary" onClick={() => tidyPasted(true, true)}>
+                      둘 다
+                    </button>
+                  )}
+                  <button className="ghost small" onClick={() => setPasted(null)}>
+                    그대로
+                  </button>
+                </div>
+              )}
               {curBeat && (
                 <div className="beat-now" title="지금 쓰고 있는 쪽 줄거리">
                   <span className="faint">
@@ -844,6 +932,7 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
           />
         )}
         {view === 'mood' && <MoodBoard bookId={bookId} />}
+        {view === 'toc' && <TocView book={book} nodes={live} onOpen={(id) => select(id)} onPatchBook={patchBook} />}
         {view === 'stats' && <BookStats book={book} nodes={live} onPatchBook={patchBook} onPatchNode={patchNode} />}
         {view === 'notes' && <BookNotes book={book} entries={refs} onSave={(notes) => patchBook({ notes })} />}
         {view === 'settings' && (
@@ -890,4 +979,10 @@ export function Workspace({ bookId, nodeId }: { bookId: string; nodeId?: string 
       )}
     </div>
   );
+}
+
+/** 붙여넣은 글에 정리할 거리가 있나: 엔터가 많거나(정리하면 3개 넘게 줄어듦), 글자로 남은 마크다운 기호 · 곧은 따옴표 */
+export function pasteIssues(text: string): { breaks: boolean; marks: boolean } {
+  const tidy = tidyBreaks(text, 'all', { dialogue: true });
+  return { breaks: countBreaks(text) - countBreaks(tidy) >= 3, marks: findTraces(text).some((x) => x.fix !== undefined && (x.kind === 'md' || x.kind === 'quote')) };
 }

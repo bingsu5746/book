@@ -1,6 +1,7 @@
 // Word(.docx) 내보내기: 제목 · 지은이 · 부 · 장 · 본문(문단 들여쓰기) · 장면 나눔만 담은 단순한 문서. 서식(굵게 · 기울임)과 그림은 넣지 않는다.
 import { strToU8, zipSync } from 'fflate';
 import { plain } from './text';
+import { notesToPlain } from './footnotes';
 import type { ReadNode } from './types';
 
 const esc = (s: string) => s.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -21,7 +22,7 @@ export function makeDocx(title: string, author: string, nodes: ReadNode[], opts:
     if (n.kind === 'part') body.push(para(n.title, { style: 'Heading1' }));
     else if (n.kind === 'chapter') body.push(para(n.title || '제목 없음', { style: 'Heading2' }));
     else if (n.kind === 'scene' && !matter) body.push(para('*  *  *', { center: true }));
-    const text = plain(n.body).trim();
+    const text = notesToPlain(plain(n.body)).replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
     if (!text) continue;
     for (const p of text.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean)) {
       if (n.id === 'm-dedication') body.push(para(p, { center: true, italic: true, lines: true }));

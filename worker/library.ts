@@ -17,7 +17,7 @@ import { flattenTree, snippets } from './util';
 import { cleanSynopsis, FALLBACK, infoMessages, INFO_MARK, MODEL, modelInput, parseInfo, readOutput, synopsisMessages } from './ai';
 import { askGemini, GeminiDayLimit, geminiKey, geminiModels, pacificDay, type Msg } from './gemini';
 import { relayFetch } from './relay';
-import { matterNodes } from '../src/lib/matter';
+import { matterNodes, tocList } from '../src/lib/matter';
 import { extractMessages, parseExtract, interviewMessages } from './tools';
 import { outlineMessages, parseOutline, fakeOutline } from './outline';
 import { worldQuestionMessages, clueMessages, parseClues, readerMessages, parseReader, sentencesWith, synonymMessages, parseOptions, defineMessages, cleanRecap, conflictMessages, dialogueMessages, fakeTool, findDialogue, markDialogue, namesMessages, parseEdits, parseIssues, parseNames, parseQuestions, parseSpeakers, polishMessages, previousDigest, questionMessages, readJson, recapMessages, TOOLS, type ToolName } from './tools';
@@ -190,6 +190,8 @@ export class Library extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS analysis_jobs_book ON analysis_jobs (book_id);
       CREATE TABLE IF NOT EXISTS ai_usage (user_id TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (user_id, day));
       CREATE TABLE IF NOT EXISTS gem_out (model TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (model, day));
+      CREATE TABLE IF NOT EXISTS bimgs (id TEXT PRIMARY KEY, book_id TEXT NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, w INTEGER NOT NULL DEFAULT 0, h INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS bimgs_book ON bimgs (book_id);
       CREATE TABLE IF NOT EXISTS book_daily (book_id TEXT NOT NULL, day TEXT NOT NULL, chars INTEGER NOT NULL, PRIMARY KEY (book_id, day));
       CREATE TABLE IF NOT EXISTS moods (id TEXT PRIMARY KEY, book_id TEXT NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, caption TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS moods_book ON moods (book_id);
@@ -260,6 +262,9 @@ export class Library extends DurableObject<Env> {
     // 로그인 없는 읽기 링크: 그 책의 가장 최근 판만, 읽기만
     const pub = path.match(/^public\/([a-f0-9]{32})$/);
     if (pub && req.method === 'GET') return this.publicBook(pub[1]);
+    // 원고 속 사진: 책 주인 · 공유받은 친구 · 열린 읽기 링크가 있으면 볼 수 있다
+    const bimg = path.match(/^bimg\/([a-z0-9]+)$/);
+    if (bimg && req.method === 'GET') return this.bookImage(bimg[1], session?.user ?? null);
     const pubCover = path.match(/^public\/([a-f0-9]{32})\/cover$/);
     if (pubCover && req.method === 'GET') {
       const l = this.one('SELECT book_id, expires, revoked FROM links WHERE token = ?', pubCover[1]);
@@ -457,6 +462,7 @@ export class Library extends DurableObject<Env> {
     if (path === 'community' && method === 'GET') return this.community(user);
     if (path === 'feed' && method === 'GET') return this.feed(user);
     if ((r = m(/^editions\/([a-z0-9]+)$/)) && method === 'GET') return this.getEdition(user, r[1]);
+    if ((r = m(/^books\/([a-z0-9]+)\/bimgs$/)) && method === 'POST') return this.addBookImage(user, r[1], b);
     if ((r = m(/^books\/([a-z0-9]+)\/daily$/)) && method === 'GET') {
       this.ownBook(user, r[1]);
       return json({ days: this.rows('SELECT day, chars FROM book_daily WHERE book_id = ? ORDER BY day DESC LIMIT 120', r[1]) });
@@ -723,7 +729,7 @@ export class Library extends DurableObject<Env> {
       this.sql.exec('DELETE FROM edition_nodes WHERE edition_id = ?', e.id);
       this.sql.exec('DELETE FROM likes WHERE edition_id = ?', e.id);
     }
-    for (const t of ['nodes', 'snapshots', 'editions', 'annotations', 'ratings', 'links', 'covers', 'book_daily', 'moods']) this.sql.exec(`DELETE FROM ${t} WHERE book_id = ?`, id);
+    for (const t of ['nodes', 'snapshots', 'editions', 'annotations', 'ratings', 'links', 'covers', 'book_daily', 'moods', 'bimgs']) this.sql.exec(`DELETE FROM ${t} WHERE book_id = ?`, id);
     this.sql.exec('DELETE FROM books WHERE id = ?', id);
   }
   private touchBook(id: string) {
@@ -1122,7 +1128,7 @@ export class Library extends DurableObject<Env> {
     const chars = nodes.reduce((s, n) => s + charsNoSpace(n.body), 0);
     this.sql.exec('INSERT INTO editions (id, book_id, number, note, title, subtitle, author, color, chars, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, bookId, number, str(note, 1000), full.title, full.subtitle, full.author, full.color, chars, Date.now());
     // 앞붙이(헌사) · 뒷붙이(작가의 말 · 판권면)도 판에 넣는다
-    const mt = matterNodes({ title: String(full.title), author: String(full.author), meta: parseJson(full.meta) }, { number, date: new Date().toISOString().slice(0, 10) });
+    const mt = matterNodes({ title: String(full.title), author: String(full.author), meta: parseJson(full.meta) }, { number, date: new Date().toISOString().slice(0, 10) }, { toc: tocList(nodes) });
     [...mt.front, ...nodes, ...mt.back].forEach((n, i) => this.sql.exec('INSERT INTO edition_nodes (edition_id, node_id, sort, depth, kind, title, body) VALUES (?, ?, ?, ?, ?, ?, ?)', id, n.id, i, n.depth, n.kind, n.title, n.body));
     return { id, number };
   }
@@ -1138,6 +1144,28 @@ export class Library extends DurableObject<Env> {
     if (this.autoAnalysisOn(user) && !parseJson(full.meta).analysisOf) analysis = (await this.startAnalysis(user, bookId)) === true;
     return json({ edition: { id, number }, analysis });
   }
+  // ---------------------------------------------------------------- 원고 속 사진
+  private addBookImage(user: UserRow, bookId: string, b: Body) {
+    this.ownBook(user, bookId);
+    const mime = String(b.mime ?? '');
+    const data = String(b.data ?? '');
+    if (!IMAGE_TYPES.has(mime) || !/^[A-Za-z0-9+/=]+$/.test(data)) return fail('그림 파일이 아니에요.');
+    if (data.length > MAX_IMAGE) return fail('그림이 너무 커요.', 413);
+    if (Number(this.one('SELECT COUNT(*) AS n FROM bimgs WHERE book_id = ?', bookId)?.n ?? 0) >= 300) return fail('한 책에 사진은 300장까지 넣을 수 있어요.', 413);
+    const id = newId();
+    this.sql.exec('INSERT INTO bimgs (id, book_id, mime, data, w, h, created) VALUES (?, ?, ?, ?, ?, ?, ?)', id, bookId, mime, data, Math.max(0, Math.floor(num(b.w))), Math.max(0, Math.floor(num(b.h))), Date.now());
+    return json({ id });
+  }
+  private bookImage(id: string, user: UserRow | null) {
+    const img = this.one('SELECT i.mime, i.data, i.book_id, b.owner, b.shared, b.deleted FROM bimgs i JOIN books b ON b.id = i.book_id WHERE i.id = ?', id);
+    if (!img || img.deleted) return fail('그림을 찾을 수 없어요.', 404);
+    const linked = !!this.one('SELECT token FROM links WHERE book_id = ? AND revoked IS NULL AND (expires IS NULL OR expires > ?)', img.book_id, Date.now());
+    const ok = (user && (img.owner === user.id || Number(img.shared) === 1)) || linked;
+    if (!ok) return fail('그림을 찾을 수 없어요.', 404);
+    const bin = Uint8Array.from(atob(String(img.data)), (x) => x.charCodeAt(0));
+    return new Response(bin, { headers: { 'content-type': String(img.mime), 'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
+  }
+
   // ---------------------------------------------------------------- 무드보드
   private addMood(user: UserRow, bookId: string, b: Body) {
     this.ownBook(user, bookId);

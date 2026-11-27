@@ -115,8 +115,15 @@ export function Reader({
   const order = useMemo(() => nodes.map((n) => n.id), [nodes]);
   const showLinks = prefs.links && !!entries?.length;
   const blocks = useMemo(() => buildBlocks(nodes, { breaks: lineBreaks, links: showLinks, names: showLinks ? entries!.flatMap((e) => [e.name, ...e.aliases]) : [] }), [nodes, showLinks, entries, lineBreaks]);
-  const [wl, setWl] = useState<{ x: number; y: number; e: EntryRef | null; name: string } | null>(null);
+  const [wl, setWl] = useState<{ x: number; y: number; e: EntryRef | null; name: string; note?: string } | null>(null);
   const openLink = (t: HTMLElement) => {
+    // 주석 표시(*)를 누르면 그 설명을
+    const fn = t.closest<HTMLElement>('.fn');
+    if (fn) {
+      const r = fn.getBoundingClientRect();
+      setWl({ x: r.left + r.width / 2, y: r.bottom, name: fn.textContent ?? '*', e: null, note: fn.dataset.note ?? '' });
+      return true;
+    }
     const el = t.closest<HTMLElement>('.wl');
     if (!el) return false;
     const name = el.dataset.entry ?? '';
@@ -1043,8 +1050,10 @@ export function Reader({
       )}
       {wl && (
         <div className="wl-pop" style={{ left: Math.min(Math.max(wl.x, 150), innerWidth - 150), top: wl.y + 8 }} role="dialog" aria-label={wl.name}>
-          <b>{wl.e?.name ?? wl.name}</b>
-          {wl.e ? (
+          <b>{wl.note != null ? `주석 ${wl.name}` : (wl.e?.name ?? wl.name)}</b>
+          {wl.note != null ? (
+            <p>{wl.note}</p>
+          ) : wl.e ? (
             <>
               <span className="tiny" style={{ color: 'var(--rmuted)' }}>{wl.e.type}</span>
               {wl.e.summary && <p>{wl.e.summary}</p>}

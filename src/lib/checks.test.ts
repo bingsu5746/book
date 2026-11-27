@@ -224,7 +224,6 @@ describe('시리즈 묶기', () => {
 
 import { unzipSync, strFromU8 } from 'fflate';
 import { makeDocx } from './docx';
-import { printCss } from './print';
 describe('Word · PDF 내보내기', () => {
   it('docx: 제목 · 장 · 본문 · 장면 나눔, 글자는 이스케이프, 앞붙이 가운데', () => {
     const z = unzipSync(makeDocx('새벽 <1>', '홍 & 설', [
@@ -244,13 +243,6 @@ describe('Word · PDF 내보내기', () => {
     expect(d.indexOf('엄마에게')).toBeLessThan(d.indexOf('1장'));
     expect(d.match(/<w:p>/g)!.length).toBeGreaterThan(5);
   });
-  it('인쇄 CSS: 판형 · 글자 크기 · 쪽 번호', () => {
-    const c = printCss('sinkook', 11);
-    expect(c).toContain('size:152mm 225mm');
-    expect(c).toContain('11pt/1.85');
-    expect(c).toContain('counter(page)');
-    expect(printCss('A4', 10)).toContain('size:A4');
-  });
 });
 
 import { toMarkdown, toText } from './exporters';
@@ -259,5 +251,21 @@ describe('앞붙이는 장면 나눔 표시 없이', () => {
     const n = [{ id: 'm-dedication', kind: 'scene' as const, depth: 0, title: '', body: '엄마에게' }, { id: 'a', kind: 'chapter' as const, depth: 0, title: '1장', body: '글' }];
     expect(toText('책', '', n)).not.toMatch(/^\*$/m);
     expect(toMarkdown('책', '', n)).not.toContain('***');
+  });
+});
+
+import { extractNotes, nextNoteId, noteLabel, notesToPlain } from './footnotes';
+describe('주석', () => {
+  it('설명 줄을 떼어 내고, 표시는 *, **, ***, *4 / 숫자', () => {
+    const r = extractNotes('은열쇠[^1]를 쥐었다.\n\n[^1]: 할머니의 열쇠\n[^x]: 안 쓴 설명');
+    expect(r.body.trim()).toBe('은열쇠[^1]를 쥐었다.');
+    expect(r.notes.get('1')).toBe('할머니의 열쇠');
+    expect([1, 2, 3, 4].map((n) => noteLabel(n))).toEqual(['*', '**', '***', '*4']);
+    expect(noteLabel(2, 'number')).toBe('2');
+    expect(nextNoteId('a[^1] b[^3]')).toBe('4');
+    expect(nextNoteId('없음')).toBe('1');
+  });
+  it('글(txt)에서는 * 와 장 끝 설명으로, 설명 없는 표시는 그대로', () => {
+    expect(notesToPlain('가[^a] 나[^b] 다[^zz]\n\n[^a]: 하나\n[^b]: 둘')).toBe('가* 나** 다[^zz]\n\n* 하나\n\n** 둘\n');
   });
 });

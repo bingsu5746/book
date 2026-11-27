@@ -9,7 +9,7 @@ import { loadFull, toReadNodes, type FullBook } from '../../lib/store';
 import { Spinner, toast } from '../../lib/ui';
 import { Reader } from './Reader';
 import { ExportDialog } from '../ExportDialog';
-import { matterNodes } from '../../lib/matter';
+import { matterNodes, tocList } from '../../lib/matter';
 
 /** 내 책 읽기 (내가 쓴 책 · 들인 책). 받아 둔 사본이 있으면 인터넷 없이도 열린다 */
 export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeId?: string; at?: string | null; find?: string | null }) {
@@ -26,8 +26,10 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
   }, [data?.book.world_id]);
   const nodesMemo = useMemo(() => {
     if (!data) return [];
-    const m = matterNodes(data.book, { number: data.book.last_edition ?? undefined, date: new Date().toLocaleDateString('sv-SE') });
-    return [...m.front, ...toReadNodes(data.nodes), ...m.back];
+    const body = toReadNodes(data.nodes);
+    // 앞붙이 · 뒷붙이(목차 포함)는 내가 쓴 책에만
+    const m = data.book.kind === 'write' ? matterNodes(data.book, { number: data.book.last_edition ?? undefined, date: new Date().toLocaleDateString('sv-SE') }, { toc: tocList(body) }) : { front: [], back: [] };
+    return [...m.front, ...body, ...m.back];
   }, [data]);
   const patchMeta = (m: Record<string, unknown>) => {
     if (!data) return;

@@ -1,6 +1,7 @@
 // 내보내기: 마크다운 · 글(txt) · 인쇄용 HTML
 import { renderMd } from './md';
 import { plain } from './text';
+import { notesToPlain } from './footnotes';
 import type { ReadNode } from './types';
 
 export function toMarkdown(title: string, author: string, nodes: ReadNode[]): string {
@@ -19,7 +20,7 @@ export function toText(title: string, author: string, nodes: ReadNode[]): string
   for (const n of nodes) {
     if (n.kind === 'part' || n.kind === 'chapter') out.push('', n.title, '');
     else if (n.kind === 'scene' && !n.id.startsWith('m-')) out.push('', '*', '');
-    out.push(plain(n.body).trim());
+    out.push(notesToPlain(plain(n.body)).trim());
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }

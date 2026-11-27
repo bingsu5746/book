@@ -4,8 +4,8 @@
 // - %%작가 메모%%: 리더 · 공유본에는 안 보이는 메모
 // - 집중 모드(지금 문단만 진하게) · 타자기 모드(쓰는 줄을 화면 가운데)
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { Compartment, EditorSelection, EditorState, RangeSetBuilder, StateEffect, StateField, type Extension } from '@codemirror/state';
-import { Decoration, type DecorationSet, drawSelection, EditorView, hoverTooltip, keymap, placeholder, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { Compartment, EditorSelection, EditorState, RangeSetBuilder, StateEffect, StateField, type Extension, type Text } from '@codemirror/state';
+import { Decoration, type DecorationSet, drawSelection, EditorView, hoverTooltip, keymap, placeholder, ViewPlugin, WidgetType, type ViewUpdate } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
@@ -145,6 +145,53 @@ const marksField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
+// 원고 속 사진: 「![설명](/api/bimg/…)」 줄 아래에 그림을 작게 보여 준다
+class ImgWidget extends WidgetType {
+  constructor(
+    readonly src: string,
+    readonly alt: string,
+  ) {
+    super();
+  }
+  eq(o: ImgWidget) {
+    return o.src === this.src && o.alt === this.alt;
+  }
+  toDOM() {
+    const d = document.createElement('div');
+    d.className = 'cm-img-prev';
+    const i = document.createElement('img');
+    i.src = this.src;
+    i.alt = this.alt;
+    i.loading = 'lazy';
+    d.appendChild(i);
+    if (this.alt) {
+      const c = document.createElement('span');
+      c.textContent = this.alt;
+      d.appendChild(c);
+    }
+    return d;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+const IMG_LINE = /^!\[([^\]]*)\]\((\/api\/bimg\/[a-z0-9]+|https:\/\/[^)\s]+)(?:\s+"\d+x\d+")?\)\s*$/;
+function imgDecos(doc: Text): DecorationSet {
+  const b = new RangeSetBuilder<Decoration>();
+  if (!doc.toString().includes('![')) return b.finish();
+  for (let i = 1; i <= doc.lines; i++) {
+    const l = doc.line(i);
+    const m = l.text.match(IMG_LINE);
+    if (m) b.add(l.to, l.to, Decoration.widget({ widget: new ImgWidget(m[2], m[1]), block: true, side: 1 }));
+  }
+  return b.finish();
+}
+const imgField = StateField.define<DecorationSet>({
+  create: (s) => imgDecos(s.doc),
+  update: (v, tr) => (tr.docChanged ? imgDecos(tr.state.doc) : v),
+  provide: (f) => EditorView.decorations.from(f),
+});
+
 function wrapSel(view: EditorView, before: string, after = before) {
   const tr = view.state.changeByRange((r) => {
     const text = view.state.sliceDoc(r.from, r.to);
@@ -171,6 +218,8 @@ export interface EditorProps {
   onLinkClick?: (name: string) => void;
   /** 글을 고르면 그 자리(화면 좌표) — 서식 말풍선을 띄우려고 */
   onSelectRect?: (r: { x: number; y: number } | null) => void;
+  /** 긴 글을 붙여넣었을 때 (정리할지 물으려고) */
+  onPasted?: (from: number, to: number, text: string) => void;
   /** 커서가 옮겨질 때 (지금 쓰는 쪽 줄거리를 보여 주려고) */
   onCursor?: (pos: number, doc: string) => void;
 }
@@ -270,6 +319,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
           autocompletion({ override: [complete], activateOnTyping: true, icons: false }),
           tip,
           marksField,
+          imgField,
           placeholder('여기에 쓰세요. [[ 를 치면 세계관 항목을 불러올 수 있어요.'),
           modes.current.deco.of(decoExt(nameSet(p.entries), p.dialogueTint)),
           modes.current.focus.of(p.focusMode ? focusPlugin : []),
@@ -287,6 +337,12 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(prop
           ]),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) propsRef.current.onChange(u.state.doc.toString());
+            if (u.docChanged && propsRef.current.onPasted)
+              for (const tr of u.transactions)
+                if (tr.isUserEvent('input.paste'))
+                  tr.changes.iterChanges((_fa, _ta, fb, tb, ins) => {
+                    if (ins.length >= 200) propsRef.current.onPasted?.(fb, tb, ins.toString());
+                  });
             if (u.selectionSet || u.docChanged) propsRef.current.onCursor?.(u.state.selection.main.head, u.state.doc.toString());
             if (u.selectionSet || u.docChanged) {
               const r = u.state.selection.main;

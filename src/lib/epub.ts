@@ -33,7 +33,7 @@ ${body}
 </body>
 </html>`;
 
-export function makeEpub(book: { title: string; author: string; id: string; color?: string; meta?: Record<string, unknown> }, nodes: ReadNode[], opts: { breaks?: boolean; coverImage?: { mime: string; bytes: Uint8Array } } = {}): Uint8Array {
+export function makeEpub(book: { title: string; author: string; id: string; color?: string; meta?: Record<string, unknown> }, nodes: ReadNode[], opts: { breaks?: boolean; coverImage?: { mime: string; bytes: Uint8Array }; images?: Map<string, { mime: string; bytes: Uint8Array }> } = {}): Uint8Array {
   const img = opts.coverImage;
   const coverFile = img ? `cover.${img.mime === 'image/png' ? 'png' : img.mime === 'image/webp' ? 'webp' : 'jpg'}` : 'cover.svg';
   // 부는 혼자 한 쪽, 장 · 장면은 장 단위로 묶어 한 파일
@@ -77,6 +77,19 @@ export function makeEpub(book: { title: string; author: string; id: string; colo
       .map((c, i) => `<navPoint id="n${i + 1}" playOrder="${i + 1}"><navLabel><text>${esc(c.title || '·')}</text></navLabel><content src="${c.id}.xhtml"/></navPoint>`)
       .join('')}</navMap></ncx>`),
   };
+  // 원고 속 사진: 파일 안에 넣고 주소를 바꾼다 (전자책 앱은 인터넷 주소를 못 읽는 경우가 많다)
+  const used: { id: string; href: string; mime: string }[] = [];
+  for (const c of chapters)
+    c.html = c.html.replace(/src="(\/api\/bimg\/([a-z0-9]+))"/g, (m, src: string, id: string) => {
+      const im = opts.images?.get(src);
+      if (!im) return m;
+      const href = `img/${id}.${im.mime === 'image/png' ? 'png' : im.mime === 'image/webp' ? 'webp' : 'jpg'}`;
+      if (!used.some((u) => u.id === id)) {
+        used.push({ id, href, mime: im.mime });
+        files[`OEBPS/${href}`] = im.bytes;
+      }
+      return `src="${href}"`;
+    });
   for (const c of chapters) files[`OEBPS/${c.id}.xhtml`] = strToU8(page(c.title, c.html));
   files['OEBPS/content.opf'] = strToU8(`<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="ko">
@@ -95,6 +108,7 @@ ${book.author ? `<dc:creator>${esc(book.author)}</dc:creator>` : ''}
 <item id="cover-image" href="${coverFile}" media-type="${img ? img.mime : 'image/svg+xml'}" properties="cover-image"/>
 <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
 ${chapters.map((c) => `<item id="${c.id}" href="${c.id}.xhtml" media-type="application/xhtml+xml"/>`).join('\n')}
+${used.map((u) => `<item id="img-${u.id}" href="${u.href}" media-type="${u.mime}"/>`).join('\n')}
 </manifest>
 <spine toc="ncx">
 <itemref idref="cover"/>
@@ -117,5 +131,15 @@ export async function makeEpubWithCover(book: Parameters<typeof makeEpub>[0], no
       /* 글자 표지로 */
     }
   }
-  return makeEpub(book, nodes, { ...opts, coverImage });
+  // 원고 속 사진도 받아 둔다
+  const images = new Map<string, { mime: string; bytes: Uint8Array }>();
+  for (const src of new Set(nodes.flatMap((n) => [...n.body.matchAll(/\((\/api\/bimg\/[a-z0-9]+)/g)].map((m) => m[1])))) {
+    try {
+      const r = await fetch(src, { credentials: 'same-origin' });
+      if (r.ok) images.set(src, { mime: (r.headers.get('content-type') ?? 'image/jpeg').split(';')[0], bytes: new Uint8Array(await r.arrayBuffer()) });
+    } catch {
+      /* 못 받은 사진은 빼고 */
+    }
+  }
+  return makeEpub(book, nodes, { ...opts, coverImage, images });
 }
