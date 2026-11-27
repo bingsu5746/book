@@ -115,3 +115,55 @@ describe('사진', () => {
     if (process.env.TYPESET_OUT) writeFileSync(process.env.TYPESET_OUT.replace('.pdf', '-img.pdf'), out.bytes);
   }, 30_000);
 });
+
+import fontkit from '@pdf-lib/fontkit';
+import { subsetterFrom } from './subset';
+import { FACES, faceFiles, type FaceId } from './settings';
+describe('글꼴', () => {
+  const subP = subsetterFrom(readFileSync('node_modules/harfbuzzjs/dist/harfbuzz-subset.wasm'));
+  const load = (id: FaceId) => faceFiles(id).map((u) => new Uint8Array(readFileSync(`public${u}`)));
+  it('글꼴마다 보통 · 굵게 파일 · 미리 보기 · 라이선스가 있고 한글 11,172자를 다 갖췄다', () => {
+    for (const [id, f] of Object.entries(FACES) as [FaceId, (typeof FACES)[FaceId]][]) {
+      for (const b of load(id)) {
+        const fk = fontkit.create(b as never);
+        let n = 0;
+        for (let c = 0xac00; c <= 0xd7a3; c++) if (fk.hasGlyphForCodePoint(c)) n++;
+        expect(n, f.name).toBe(11172);
+        expect(fk.hasGlyphForCodePoint(0x6f22), `${f.name} 한자`).toBe(f.hanja);
+      }
+      expect(readFileSync(`public/fonts/preview/${f.file}.ttf`).length).toBeGreaterThan(1000);
+      expect(readFileSync(`public/fonts/OFL-${f.file}.txt`, 'utf8')).toContain('Open Font License');
+    }
+  });
+  it('쓴 글자만 남겨도 그 글자들은 다 있고, 파일이 아주 작아진다', async () => {
+    const sub = await subP;
+    const text = '그날 아침 바람은 차가웠다. “Hello” 123 「책」';
+    const small = sub(fonts.regular, { text });
+    const fk = fontkit.create(small as never);
+    for (const c of text) expect(fk.hasGlyphForCodePoint(c.codePointAt(0)!), c).toBe(true);
+    expect(fk.hasGlyphForCodePoint('펭'.codePointAt(0)!)).toBe(false);
+    expect(small.length).toBeLessThan(40_000);
+  });
+  it('글꼴을 줄여 넣은 PDF 는 작고, 쪽수는 같다', async () => {
+    const f = openFonts(fonts.regular, fonts.bold, await subP, 'GowunBatang');
+    const out = await buildPrintPdf(nodes2(), { ...opts, bleed: false }, f);
+    const full = await buildPrintPdf(nodes2(), { ...opts, bleed: false }, fonts);
+    expect(out.pages).toBe(full.pages);
+    expect(out.bytes.length).toBeLessThan(full.bytes.length / 10);
+    if (process.env.TYPESET_OUT) writeFileSync(process.env.TYPESET_OUT.replace('.pdf', '-subset.pdf'), out.bytes);
+  }, 60_000);
+  it('본명조는 한자를 그대로 싣는다', async () => {
+    const [r, b] = load('noto');
+    const f = openFonts(r, b, await subP, 'NotoSerifKR');
+    const out = await buildPrintPdf([{ id: 'c', kind: 'chapter', title: '漢字의 길', body: '그는 「春秋」를 읽었다.' }], { ...opts, multipleOf4: false }, f);
+    expect(out.missing).toEqual([]);
+    expect(out.bytes.length).toBeLessThan(400_000);
+    if (process.env.TYPESET_OUT) writeFileSync(process.env.TYPESET_OUT.replace('.pdf', '-noto.pdf'), out.bytes);
+  }, 60_000);
+});
+function nodes2() {
+  return [
+    { id: 'c1', kind: 'chapter', title: '1장 바람', body: (para + '\n\n').repeat(12) + '은열쇠[^1]를 쥐었다.\n\n[^1]: 할머니가 준 열쇠.' },
+    { id: 'c2', kind: 'chapter', title: '2장 **정원**', body: para.repeat(10) },
+  ];
+}

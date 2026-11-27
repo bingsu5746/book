@@ -4209,3 +4209,47 @@ p.figure .caption {
 .editor-wrap {
   position: relative;
 }
+
+/* 인쇄용 글꼴 고르기 */
+.face-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+}
+.face-opt {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 12px;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+.face-opt.on {
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+.face-name {
+  font-size: 16px;
+}
+.face-sample,
+.face-meta {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.face-sample {
+  font-size: 14px;
+  color: var(--muted);
+}
+.face-meta {
+  font-size: 11px;
+  color: var(--faint, var(--muted));
+}

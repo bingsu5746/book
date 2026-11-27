@@ -4,7 +4,7 @@ import { matterNodes, readMatter, tocList } from '../../lib/matter';
 import { toReadNodes } from '../../lib/store';
 import type { Book, BookNode } from '../../lib/types';
 import { Spinner } from '../../lib/ui';
-import { printSettingsOf, type PrintSettings } from '../../lib/typeset/settings';
+import { FACES, printSettingsOf, type FaceId, type PrintSettings } from '../../lib/typeset/settings';
 import { SIZES } from '../../lib/typeset/layout';
 
 interface Entry {
@@ -18,7 +18,7 @@ export function TocView({ book, nodes, onOpen, onPatchBook }: { book: Book; node
   const ps = printSettingsOf(book.meta);
   const matter = readMatter(book.meta);
   const [res, setRes] = useState<{ toc: Entry[]; pages: number } | null>(null);
-  const [status, setStatus] = useState('인쇄용 글꼴을 받는 중… (처음 한 번 약 17MB)');
+  const [status, setStatus] = useState(`인쇄용 글꼴(${FACES[ps.face].name})을 받는 중… (처음 한 번 약 ${FACES[ps.face].mb}MB)`);
   const [err, setErr] = useState('');
   // 글 · 제목 · 설정이 바뀔 때만 다시 센다
   const sig = useMemo(() => nodes.map((n) => `${n.id}:${n.title}:${n.kind}:${n.deleted ? 1 : 0}:${(n.body ?? '').length}`).join('|') + JSON.stringify(ps) + JSON.stringify(matter) + book.title, [nodes, ps, matter, book.title]);
@@ -27,7 +27,8 @@ export function TocView({ book, nodes, onOpen, onPatchBook }: { book: Book; node
     const t = setTimeout(async () => {
       try {
         const ts = await import('../../lib/typeset');
-        const fonts = await ts.loadPrintFonts();
+        setStatus(`인쇄용 글꼴(${FACES[ps.face].name})을 받는 중… (처음 한 번 약 ${FACES[ps.face].mb}MB)`);
+        const fonts = await ts.loadPrintFonts(ps.face);
         if (!live) return;
         setStatus('');
         const body = toReadNodes(nodes);
@@ -66,6 +67,16 @@ export function TocView({ book, nodes, onOpen, onPatchBook }: { book: Book; node
               {Object.entries(SIZES).map(([id, s]) => (
                 <option key={id} value={id}>
                   {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            글꼴
+            <select className="input" value={ps.face} onChange={(e) => setPrint({ face: e.target.value as FaceId })}>
+              {(Object.entries(FACES) as [FaceId, (typeof FACES)[FaceId]][]).map(([id, f]) => (
+                <option key={id} value={id}>
+                  {f.name} ({f.kind})
                 </option>
               ))}
             </select>

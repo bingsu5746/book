@@ -17,7 +17,7 @@ function serviceWorker(): Plugin {
       const root = join(import.meta.dirname, outDir);
       // PDF 도구와 글꼴 조각은 쓸 때만 받는다 (크기가 커서 미리 받지 않음)
       const files = readdirSync(join(root, 'assets'))
-        .filter((f) => !/^pdf/.test(f) && !/\.(woff2?|ttf)$/.test(f))
+        .filter((f) => !/^(pdf|typeset|harfbuzz)/.test(f) && !/\.(woff2?|ttf|wasm)$/.test(f))
         .map((f) => `/assets/${f}`);
       files.push('/', '/icon.svg', '/manifest.webmanifest', '/seed/dawn.md', '/seed/notes.md');
       const h = createHash('sha256');

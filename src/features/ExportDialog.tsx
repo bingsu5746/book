@@ -8,7 +8,8 @@ import { matterNodes, readMatter, tocList } from '../lib/matter';
 import { loadFull, toReadNodes, type FullBook } from '../lib/store';
 import type { ReadNode } from '../lib/types';
 import { Modal, Spinner, toast } from '../lib/ui';
-import { DEFAULT_PRINT, printSettingsOf, type PrintSettings } from '../lib/typeset/settings';
+import { DEFAULT_PRINT, FACES, printSettingsOf, type PrintSettings } from '../lib/typeset/settings';
+import { FacePicker } from './FacePicker';
 import { SIZES } from '../lib/typeset/layout';
 
 type Fmt = 'pdf' | 'docx' | 'epub' | 'txt' | 'md' | 'html';
@@ -66,10 +67,10 @@ export function ExportDialog({ bookId, onClose }: { bookId: string; onClose: () 
       else {
         // 인쇄용 PDF: 글꼴 · 그림을 받아 조판한다 (설정은 책에 남겨 집필실 목차 쪽수와 맞춘다)
         if (book.owner) void api(`books/${book.id}`, { method: 'PATCH', body: { meta: { ...book.meta, print: ps } } }).catch(() => {});
-        setStatus('인쇄용 글꼴을 받는 중… (처음 한 번 약 17MB)');
+        setStatus(`인쇄용 글꼴(${FACES[ps.face].name})을 받는 중… (처음 한 번 약 ${FACES[ps.face].mb}MB)`);
         const t = await import('../lib/typeset');
         const { loadImages, imageSrcs } = await import('../lib/typeset/images');
-        const fonts = await t.loadPrintFonts();
+        const fonts = await t.loadPrintFonts(ps.face);
         setStatus('그림을 받는 중…');
         const images = await loadImages(imageSrcs(all.map((n) => n.body)));
         setStatus('조판하는 중…');
@@ -123,6 +124,10 @@ export function ExportDialog({ bookId, onClose }: { bookId: string; onClose: () 
           </div>
           {fmt === 'pdf' && (
             <div className="ai-card">
+              <div className="field">
+                본문 글꼴
+                <FacePicker value={ps.face} onChange={(face) => setP({ face })} />
+              </div>
               <div className="row wrap" style={{ gap: 12 }}>
                 <label className="field">
                   판형
@@ -178,7 +183,7 @@ export function ExportDialog({ bookId, onClose }: { bookId: string; onClose: () 
                 도련(재단 여백) 사방 3mm 넣기 — 인쇄소가 요구할 때만
               </label>
               <p className="faint tiny" style={{ margin: 0 }}>
-                본문은 고운바탕 글꼴(OFL)을 PDF 안에 넣어 어느 인쇄소에서 열어도 같게 나와요. 표지는 책등 두께가 쪽수 · 종이에 따라 달라 따로 만들어야 해요. 인쇄소마다 요구(도련 · 판형 · 색 방식)가 다르니 보내기 전에 그곳 안내를 한 번 확인해 주세요.
+                글꼴은 모두 상업 인쇄에 써도 되는 오픈 라이선스이고, 책에 쓴 글자만 PDF 안에 넣어 어느 인쇄소에서 열어도 같게 나와요. 한자를 쓰면 본명조 · 본고딕을 고르세요(다른 글꼴은 한자를 □ 로 바꿔요). 표지는 책등 두께가 쪽수 · 종이에 따라 달라 따로 만들어야 해요. 인쇄소마다 요구(도련 · 판형 · 색 방식)가 다르니 보내기 전에 그곳 안내를 한 번 확인해 주세요.
               </p>
             </div>
           )}

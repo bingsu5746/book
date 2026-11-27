@@ -4,6 +4,9 @@ import type { Section } from './blocks';
 import { toSections } from './blocks';
 import { layoutBook, type Metrics, type PrintOptions, type TocEntry } from './layout';
 import { renderPdf } from './render';
+import { FACES, faceFiles, type FaceId } from './settings';
+import { loadSubsetter, type Subsetter } from './subset';
+import subsetWasm from 'harfbuzzjs/dist/harfbuzz-subset.wasm?url';
 
 export type { PrintOptions } from './layout';
 export { SIZES, FONT_SCALE } from './layout';
@@ -14,9 +17,13 @@ export interface Fonts {
   bold: Uint8Array;
   fkRegular: FK;
   fkBold: FK;
+  /** 있으면 PDF 에 쓴 글자만 남긴다 (없으면 글꼴을 통째로) */
+  subset?: Subsetter;
+  /** PDF 에 적을 글꼴 이름 (예: NotoSerifKR → NotoSerifKR-Regular) */
+  name?: string;
 }
-export function openFonts(regular: Uint8Array, bold: Uint8Array): Fonts {
-  return { regular, bold, fkRegular: fontkit.create(regular as never), fkBold: fontkit.create(bold as never) };
+export function openFonts(regular: Uint8Array, bold: Uint8Array, subset?: Subsetter, name?: string): Fonts {
+  return { regular, bold, fkRegular: fontkit.create(regular as never), fkBold: fontkit.create(bold as never), subset, name };
 }
 export function metricsOf(f: Fonts): Metrics {
   return {
@@ -78,18 +85,22 @@ export function countPages(nodes: { id: string; kind: string; title: string; bod
 }
 
 // ---------------------------------------------------------------- 화면에서: 글꼴 · 설정
-let fontsP: Promise<Fonts> | null = null;
-/** 인쇄용 글꼴(고운바탕, 약 17MB)을 한 번만 받는다 */
-export function loadPrintFonts(): Promise<Fonts> {
-  if (!fontsP) {
-    fontsP = Promise.all(['/fonts/GowunBatang-Regular.ttf', '/fonts/GowunBatang-Bold.ttf'].map(async (u) => {
-      const r = await fetch(u);
-      if (!r.ok) throw new Error('인쇄용 글꼴을 받지 못했어요. 인터넷 연결을 확인해 주세요.');
-      return new Uint8Array(await r.arrayBuffer());
-    })).then(([a, b]) => openFonts(a, b));
-    fontsP.catch(() => (fontsP = null));
+const fontsP = new Map<FaceId, Promise<Fonts>>();
+/** 인쇄용 글꼴을 글꼴마다 한 번만 받는다 (보통 · 굵게 두 파일, settings.ts FACES 의 크기) */
+export function loadPrintFonts(face: FaceId = 'gowun'): Promise<Fonts> {
+  let p = fontsP.get(face);
+  if (!p) {
+    p = Promise.all([
+      ...faceFiles(face).map(async (u) => {
+        const r = await fetch(u);
+        if (!r.ok) throw new Error('인쇄용 글꼴을 받지 못했어요. 인터넷 연결을 확인해 주세요.');
+        return new Uint8Array(await r.arrayBuffer());
+      }),
+    ]).then(async ([a, b]) => openFonts(a, b, await loadSubsetter(subsetWasm).catch(() => undefined), FACES[face].file));
+    p.catch(() => fontsP.delete(face));
+    fontsP.set(face, p);
   }
-  return fontsP;
+  return p;
 }
 
-export { DEFAULT_PRINT, printSettingsOf, type PrintSettings } from './settings';
+export { DEFAULT_PRINT, FACES, printSettingsOf, type FaceId, type PrintSettings } from './settings';
