@@ -16,11 +16,15 @@ import { speak, speakSupported, stopSpeaking } from '../studio/StudioTools';
 import type { EntryRef } from '../studio/Editor';
 import { faceCss, isFace, loadReaderFace } from '../../lib/readerFonts';
 import { FACES, type FaceId } from '../../lib/typeset/settings';
+import type { BookStyle } from '../../lib/bookStyle';
 
 export interface ReaderPrefs {
   fs: number;
   lh: number;
-  font: 'serif' | 'sans' | FaceId;
+  /** book: 이 책에서 정한 글꼴 (없으면 기본 명조) */
+  font: 'serif' | 'sans' | 'book' | FaceId;
+  /** 책에서 정한 서식(장 시작 · 대사 · 따옴표 · 제목 글꼴)을 따른다 */
+  useStyle: boolean;
   theme: 'paper' | 'sepia' | 'dark';
   mode: 'page' | 'scroll';
   spread: 'auto' | 'one';
@@ -34,7 +38,7 @@ export interface ReaderPrefs {
   links: boolean;
 }
 const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-const DEFAULT: ReaderPrefs = { fs: 17, lh: 1.85, font: 'serif', theme: 'paper', mode: 'page', spread: 'auto', turn: reduced ? 'none' : 'curl', autoHide: true, margin: 'normal', links: true };
+const DEFAULT: ReaderPrefs = { fs: 17, lh: 1.85, font: 'book', useStyle: true, theme: 'paper', mode: 'page', spread: 'auto', turn: reduced ? 'none' : 'curl', autoHide: true, margin: 'normal', links: true };
 
 export interface ReaderAction {
   label: string;
@@ -44,7 +48,7 @@ export interface ReaderAction {
 }
 export const loadPrefs = (): ReaderPrefs => {
   const p = { ...DEFAULT, ...local.get<Partial<ReaderPrefs>>('reader', {}) };
-  if (p.font !== 'serif' && p.font !== 'sans' && !isFace(p.font)) p.font = 'serif';
+  if (p.font !== 'serif' && p.font !== 'sans' && p.font !== 'book' && !isFace(p.font)) p.font = 'serif';
   return p;
 };
 
@@ -78,6 +82,7 @@ export function Reader({
   initialFind,
   lineBreaks = false,
   localOnly = false,
+  bookStyle,
 }: {
   title: string;
   nodes: ReadNode[];
@@ -97,25 +102,31 @@ export function Reader({
   lineBreaks?: boolean;
   /** 로그인 없이 읽기: 읽던 자리는 기기에만, 책갈피 · 밑줄 · AI 는 끈다 */
   localOnly?: boolean;
+  /** 책에서 정한 서식 (인쇄용 PDF 설정): 있으면 리더도 같은 모양으로 */
+  bookStyle?: BookStyle;
 }) {
   const canMark = !!progressKey && !localOnly;
   const [prefs, setPrefsState] = useState<ReaderPrefs>(loadPrefs);
+  const style = prefs.useStyle ? bookStyle : undefined;
+  /** 실제로 쓰는 글꼴: 「이 책의 글꼴」이면 책에서 정한 것, 없으면 기본 명조 */
+  const font: 'serif' | 'sans' | FaceId = prefs.font === 'book' ? (bookStyle?.face ?? 'serif') : prefs.font;
+  const headFont: FaceId | null = style && style.headFace !== 'same' ? style.headFace : null;
   // 고른 글꼴이 책 글꼴이면 받아 두고, 받으면 쪽을 다시 나눈다 (글자 너비가 달라서)
   const [fontTick, setFontTick] = useState(0);
   const [fontBusy, setFontBusy] = useState(false);
 
   useEffect(() => {
-    const f = prefs.font;
-    if (!isFace(f)) return;
+    const ids = [...new Set([isFace(font) ? font : null, headFont].filter((x): x is FaceId => !!x))];
+    if (!ids.length) return;
     let live = true;
     setFontBusy(true);
-    loadReaderFace(f)
+    Promise.all(ids.map((id) => loadReaderFace(id).then(() => id)))
       .then(() => live && setFontTick((t) => t + 1))
       .catch(() => {
         if (!live) return;
-        toast(`${FACES[f].name} 글꼴을 받지 못했어요. 인터넷 연결을 확인해 주세요. 기본 글꼴로 보여 드려요.`, 'err');
+        toast('글꼴을 받지 못했어요. 인터넷 연결을 확인해 주세요. 기본 글꼴로 보여 드려요.', 'err');
         setPrefsState((old) => {
-          const v = { ...old, font: 'serif' as const };
+          const v = { ...old, font: 'serif' as const, useStyle: false };
           local.set('reader', v);
           return v;
         });
@@ -124,7 +135,7 @@ export function Reader({
     return () => {
       live = false;
     };
-  }, [prefs.font]);
+  }, [font, headFont]);
 
   const setPrefs = (p: Partial<ReaderPrefs>) =>
     setPrefsState((old) => {
@@ -146,7 +157,7 @@ export function Reader({
   const spot = useRef<Spot | null>(start ?? null);
   const order = useMemo(() => nodes.map((n) => n.id), [nodes]);
   const showLinks = prefs.links && !!entries?.length;
-  const blocks = useMemo(() => buildBlocks(nodes, { breaks: lineBreaks, links: showLinks, names: showLinks ? entries!.flatMap((e) => [e.name, ...e.aliases]) : [] }), [nodes, showLinks, entries, lineBreaks]);
+  const blocks = useMemo(() => buildBlocks(nodes, { breaks: lineBreaks, links: showLinks, names: showLinks ? entries!.flatMap((e) => [e.name, ...e.aliases]) : [], style }), [nodes, showLinks, entries, lineBreaks, style]);
   const [wl, setWl] = useState<{ x: number; y: number; e: EntryRef | null; name: string; note?: string } | null>(null);
   const openLink = (t: HTMLElement) => {
     // 주석 표시(*)를 누르면 그 설명을
@@ -344,7 +355,7 @@ export function Reader({
   useLayoutEffect(() => {
     if (mode !== 'page' || !ready) return;
     layout();
-  }, [mode, ready, layout, prefs.fs, prefs.lh, prefs.font, prefs.margin, fontTick]);
+  }, [mode, ready, layout, prefs.fs, prefs.lh, font, prefs.margin, fontTick]);
   useEffect(() => {
     if (mode !== 'page') return;
     let t = 0;
@@ -698,8 +709,8 @@ export function Reader({
   return (
     <div
       ref={rootRef}
-      className={`reader t-${prefs.theme}${prefs.font === 'sans' ? ' f-sans' : ''}${chrome ? '' : ' chrome-off'} m-${prefs.margin}`}
-      style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh), ...(isFace(prefs.font) ? { ['--rfont' as string]: faceCss(prefs.font) } : {}) }}
+      className={`reader t-${prefs.theme}${font === 'sans' ? ' f-sans' : ''}${style ? ` bs bs-${style.chapterAlign}${style.chapterDrop === 'low' ? ' bs-low' : ''}${style.firstIndent ? '' : ' bs-nofirst'}${style.dialogue === 'flush' ? ' bs-flush' : ''}` : ''}${chrome ? '' : ' chrome-off'} m-${prefs.margin}`}
+      style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh), ...(isFace(font) ? { ['--rfont' as string]: faceCss(font) } : {}), ...(headFont ? { ['--hfont' as string]: faceCss(headFont) } : {}), ...(style?.tracking ? { ['--ls' as string]: `${style.tracking}em` } : {}) }}
     >
       <div className="r-bar" onPointerMove={poke}>
         <button className="icon-btn" onClick={onExit} aria-label="닫기">
@@ -828,7 +839,8 @@ export function Reader({
           </div>
           <div className="opt">
             글꼴
-            <select className="input" value={prefs.font} onChange={(e) => setPrefs({ font: e.target.value as ReaderPrefs['font'] })} style={{ maxWidth: 190 }}>
+            <select className="input" value={prefs.font === 'book' && !bookStyle ? 'serif' : prefs.font} onChange={(e) => setPrefs({ font: e.target.value as ReaderPrefs['font'] })} style={{ maxWidth: 190 }}>
+              {bookStyle && <option value="book">이 책의 글꼴 ({FACES[bookStyle.face].name})</option>}
               <option value="serif">기본 명조</option>
               <option value="sans">기본 고딕</option>
               {(Object.entries(FACES) as [FaceId, (typeof FACES)[FaceId]][]).map(([id, f]) => (
@@ -839,6 +851,19 @@ export function Reader({
             </select>
             {fontBusy && <span className="faint tiny">글꼴 받는 중… (처음 한 번)</span>}
           </div>
+          {bookStyle && (
+            <div className="opt">
+              책 서식 <span className="faint tiny">장 시작 · 대사 · 따옴표</span>
+              <div className="seg">
+                <button className={prefs.useStyle ? 'on' : ''} onClick={() => setPrefs({ useStyle: true })}>
+                  따르기
+                </button>
+                <button className={!prefs.useStyle ? 'on' : ''} onClick={() => setPrefs({ useStyle: false })}>
+                  기본
+                </button>
+              </div>
+            </div>
+          )}
           <div className="opt">
             바탕
             <div className="row">

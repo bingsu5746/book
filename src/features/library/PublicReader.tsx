@@ -1,4 +1,5 @@
 // 로그인 없는 읽기 링크 (#/p/토큰): 작가가 링크로 보여 준 책의 가장 최근 판을 읽기만. 읽던 자리는 이 기기에만.
+import { bookStyleOf } from '../../lib/bookStyle';
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
 import type { ReadNode } from '../../lib/types';
@@ -6,7 +7,7 @@ import { Spinner } from '../../lib/ui';
 import { Reader } from './Reader';
 
 interface Pub {
-  book: { title: string; author: string; color: string; blurb: string };
+  book: { title: string; author: string; color: string; blurb: string; print?: unknown };
   edition: { id: string; number: number; created: number };
   nodes: ReadNode[];
 }
@@ -48,6 +49,7 @@ export function PublicReader({ token }: { token: string }) {
       progressKey={`l:${token}`}
       localOnly
       lineBreaks
+      bookStyle={bookStyleOf({ print: data.book.print })}
       onExit={() => (history.length > 1 ? history.back() : undefined)}
     />
   );

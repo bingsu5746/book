@@ -1,5 +1,8 @@
 // 인쇄용 조판 1단계: 원고(마크다운)를 문단 · 소제목 · 장면 나눔 · 그림 블록으로. 주석 표시는 그 자리에 붙인다.
 import { extractNotes, NOTE_REF } from '../footnotes';
+import { convertQuotes } from '../bookStyle';
+
+export { convertQuotes };
 
 export interface Run {
   text: string;
@@ -10,7 +13,7 @@ export interface Run {
   br?: boolean;
 }
 export type Block =
-  | { t: 'p'; runs: Run[]; indent: boolean; quote?: boolean; center?: boolean; small?: boolean }
+  | { t: 'p'; runs: Run[]; indent: boolean; quote?: boolean; center?: boolean; small?: boolean; dialogue?: boolean }
   | { t: 'h'; text: string }
   | { t: 'scene' }
   | { t: 'img'; src: string; alt: string; w: number; h: number };
@@ -93,14 +96,16 @@ export function mdBlocks(md: string, breaks: boolean): Block[] {
       indent = true;
       continue;
     }
-    out.push({ t: 'p', runs: inlineRuns(t, notes, breaks), indent });
+    const runs = inlineRuns(t, notes, breaks);
+    out.push({ t: 'p', runs, indent, dialogue: /^[“"「『‘]/.test(runs.find((r) => r.text)?.text ?? '') });
     indent = true;
   }
   return out;
 }
 
 /** 칸(장 · 부 · 앞붙이)을 인쇄용 묶음으로. 앞붙이는 plain 글(헌사 · 판권면)을 받는다 */
-export function toSections(nodes: { id: string; kind: string; title: string; body: string }[], breaks: boolean): Section[] {
+export function toSections(nodes0: { id: string; kind: string; title: string; body: string }[], breaks: boolean, quotes?: 'keep' | 'curly' | 'corner'): Section[] {
+  const nodes = quotes && quotes !== 'keep' ? nodes0.map((n) => ({ ...n, body: convertQuotes(n.body, quotes) })) : nodes0;
   const out: Section[] = [];
   let cur: Section | null = null;
   const lines = (s: string) =>

@@ -1,6 +1,7 @@
 // 인쇄용 조판 2단계: 블록을 줄로 나누고(어절 단위, 양끝 맞춤, 금칙), 쪽에 앉힌다(안쪽/바깥 여백, 장은 오른쪽 쪽에서, 주석은 그 쪽 아래).
 // 결과는 쪽마다 「어디에 무엇을 그릴지」 목록. 그리기(pdf)는 render.ts 가 한다. 단위는 pt (1mm = 72/25.4pt).
 import { noteLabel, type NoteStyle } from '../footnotes';
+import { splitChapterTitle } from '../bookStyle';
 import type { Block, Run, Section } from './blocks';
 
 export const MM = 72 / 25.4;
@@ -32,27 +33,34 @@ export interface PrintOptions {
   /** 「1장 바람」 같은 제목에서 번호를 떼어 윗줄에 따로: plain = 1, je = 제1장 */
   chapterNumber?: 'asis' | 'plain' | 'je';
   firstIndent?: boolean;
+  /** 줄 간격 (글자 크기의 몇 배, 기본 1.78) */
+  leading?: number;
+  /** 자간 (글자 크기의 몇 분의 일, 기본 0). 마이너스면 좁게 */
+  tracking?: number;
+  /** 따옴표 모양 통일 (기본: 쓴 그대로) */
+  quotes?: 'keep' | 'curly' | 'corner';
+  /** 대사(따옴표로 시작하는 문단): flush 는 들여쓰기 없이 시작 */
+  dialogue?: 'indent' | 'flush';
+  /** 쪽 번호 위치 · 모양 (기본: 바깥 아래, 숫자만) */
+  pageNo?: 'outer' | 'center' | 'none';
+  pageFmt?: 'plain' | 'dash' | 'dot';
+  /** 앞붙이(목차 등)는 로마 숫자, 본문 첫 장부터 1 쪽 */
+  romanFront?: boolean;
   title: string;
   subtitle?: string;
   author: string;
 }
 
-/** 「1장 바람」 · 「제1장 바람」 · 「3. 바람」 에서 번호와 이름을 가른다 (그런 모양이 아니면 null) */
-export function splitChapterTitle(t: string): { n: number; unit: string; name: string } | null {
-  const a = t.match(/^\s*(?:제\s*)?(\d{1,3})\s*(장|화)\s*[.:·\-–—]?\s*(.*)$/);
-  if (a) return { n: Number(a[1]), unit: a[2], name: a[3].trim() };
-  const b = t.match(/^\s*(\d{1,3})\s*[.)]\s+(.*)$/);
-  if (b) return { n: Number(b[1]), unit: '장', name: b[2].trim() };
-  return null;
-}
+export { splitChapterTitle };
 
 /** 글자 너비 (글자 크기 1 기준) */
 export interface Metrics {
-  adv(ch: string, bold: boolean): number;
+  /** hd: 제목 글꼴로 잴 때 */
+  adv(ch: string, bold: boolean, hd?: boolean): number;
 }
 
 export type Item =
-  | { k: 't'; x: number; y: number; text: string; size: number; bold?: boolean }
+  | { k: 't'; x: number; y: number; text: string; size: number; bold?: boolean; hd?: boolean }
   | { k: 'img'; x: number; y: number; w: number; h: number; src: string }
   | { k: 'rule'; x: number; y: number; w: number; t: number };
 export type PageKind = 'blank' | 'title' | 'front' | 'toc' | 'part' | 'chapter' | 'body' | 'colophon';
@@ -63,6 +71,20 @@ export interface Page {
   /** 머리글 글 (없으면 머리글 없음) */
   head?: string;
   folio: boolean;
+  /** 이 쪽이 속한 장 · 부 */
+  sec?: string;
+  /** 글이 찬 정도 0~1 (주석 포함), 글이 쓴 줄 수 */
+  fill?: number;
+  lines?: number;
+}
+/** 인쇄 전에 살펴볼 곳 */
+export interface Issue {
+  type: 'short-end' | 'gap';
+  id: string;
+  title: string;
+  page: number;
+  /** short-end: 마지막 쪽에 남은 줄 수 · gap: 찬 비율(%) */
+  value: number;
 }
 export interface Geo {
   W: number;
@@ -85,10 +107,10 @@ export interface TocEntry {
   page: number;
 }
 
-export function geometry(o: Pick<PrintOptions, 'size' | 'font'>): Geo {
+export function geometry(o: Pick<PrintOptions, 'size' | 'font' | 'leading'>): Geo {
   const s = SIZES[o.size];
   const size = s.pt * FONT_SCALE[o.font];
-  const g = { W: s.w * MM, H: s.h * MM, top: s.top * MM, bottom: s.bottom * MM, inner: s.inner * MM, outer: s.outer * MM, size, lead: size * 1.78, noteSize: size * 0.8, noteLead: size * 0.8 * 1.6 };
+  const g = { W: s.w * MM, H: s.h * MM, top: s.top * MM, bottom: s.bottom * MM, inner: s.inner * MM, outer: s.outer * MM, size, lead: size * (o.leading ?? 1.78), noteSize: size * 0.8, noteLead: size * 0.8 * 1.6 };
   return { ...g, textW: g.W - g.inner - g.outer, textH: g.H - g.top - g.bottom };
 }
 
@@ -122,17 +144,18 @@ export interface Line {
 }
 
 export class Measure {
-  private cache = [new Map<string, number>(), new Map<string, number>()];
-  constructor(private m: Metrics) {}
-  ch(c: string, bold: boolean): number {
-    const map = this.cache[bold ? 1 : 0];
+  private cache = [new Map<string, number>(), new Map<string, number>(), new Map<string, number>(), new Map<string, number>()];
+  /** ls: 자간 (글자 크기 기준) — 모든 글자 너비에 더해진다 */
+  constructor(private m: Metrics, private ls = 0) {}
+  ch(c: string, bold: boolean, hd = false): number {
+    const map = this.cache[(bold ? 1 : 0) + (hd ? 2 : 0)];
     let v = map.get(c);
-    if (v == null) map.set(c, (v = this.m.adv(c, bold)));
+    if (v == null) map.set(c, (v = this.m.adv(c, bold, hd) + this.ls));
     return v;
   }
-  text(t: string, bold: boolean, size: number): number {
+  text(t: string, bold: boolean, size: number, hd = false): number {
     let w = 0;
-    for (const c of t) w += this.ch(c, bold);
+    for (const c of t) w += this.ch(c, bold, hd);
     return w * size;
   }
 }
@@ -167,10 +190,11 @@ function atomize(runs: Run[]): Atom[] {
 }
 
 /** 문단 하나를 줄로. 어절 단위로 나누고, 빈칸이 너무 벌어지면 어절 안(한글)에서 나눈다. 닫는 부호는 줄 앞에, 여는 부호는 줄 끝에 오지 않게 */
-export function breakLines(runs: Run[], width: number, size: number, ms: Measure, opts: { indent?: number; justify?: boolean; center?: boolean } = {}): Line[] {
+export function breakLines(runs: Run[], width: number, size: number, ms: Measure, opts: { indent?: number; justify?: boolean; center?: boolean; hd?: boolean } = {}): Line[] {
   const markW = ms.text('*', false, size * 0.6) + size * 0.04;
-  const sp = ms.text(' ', false, size);
-  const cw = (ch: Ch) => ms.ch(ch.c, ch.bold) * size + ch.notes.length * markW;
+  const hd = !!opts.hd;
+  const sp = ms.text(' ', false, size, hd);
+  const cw = (ch: Ch) => ms.ch(ch.c, ch.bold, hd) * size + ch.notes.length * markW;
   const aw = (a: Atom) => a.chars.reduce((s, c) => s + cw(c), 0) + (a.lead?.length ?? 0) * markW;
   const lines: { atoms: Atom[]; w: number; avail: number; indent: number; justify: boolean }[] = [];
   const atoms = atomize(runs);
@@ -281,7 +305,7 @@ export function breakLines(runs: Run[], width: number, size: number, ms: Measure
         }
         if (!buf) bx = x;
         buf += c.c;
-        x += ms.ch(c.c, c.bold) * size;
+        x += ms.ch(c.c, c.bold, hd) * size;
         if (c.notes.length) {
           flushBuf();
           for (const n of c.notes) {
@@ -311,17 +335,26 @@ interface Cur {
   starCount: number;
 }
 
-export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOptions, images: Map<string, { w: number; h: number }> = new Map()): { pages: Page[]; geo: Geo; toc: TocEntry[] } {
+export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOptions, images: Map<string, { w: number; h: number }> = new Map()): { pages: Page[]; geo: Geo; toc: TocEntry[]; issues: Issue[] } {
   const g = geometry(o);
-  const ms = new Measure(metrics);
+  const ms = new Measure(metrics, o.tracking ?? 0);
   const pages: Page[] = [];
   const toc: TocEntry[] = [];
   let cur: Cur | null = null;
   let head = '';
   let chapterNotes = 0;
+  let secId = '';
+  /** 부가 나온 뒤의 장은 목차에서 한 단 들여 쓴다 */
+  let partSeen = false;
+  /** 본문 첫 쪽(로마 숫자 앞붙이가 끝나는 곳) */
+  let arabicFrom = 0;
   const baseline = (y: number, lead: number, size: number) => g.top + y + (lead + size * 0.72) / 2;
 
   const finishNotes = () => {
+    if (cur) {
+      cur.page.fill = Math.min(1, (cur.y + cur.notesH) / g.textH);
+      cur.page.lines = Math.round(cur.y / g.lead);
+    }
     if (!cur || !cur.notes.length) return;
     const c = cur;
     let y = g.textH - c.notesH;
@@ -339,7 +372,7 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
     finishNotes();
     const n = pages.length + 1;
     const recto = n % 2 === 1;
-    const page: Page = { n, kind, items: [], folio: kind === 'body' || kind === 'chapter', head: withHead && o.heads ? (recto ? head : o.title) : undefined };
+    const page: Page = { n, kind, sec: secId || undefined, items: [], folio: kind === 'body' || kind === 'chapter', head: withHead && o.heads ? (recto ? head : o.title) : undefined };
     pages.push(page);
     cur = { page, x0: recto ? g.inner : g.outer, y: 0, notes: [], notesH: 0, starCount: 0 };
     return cur;
@@ -367,7 +400,7 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
   };
   const room = (c: Cur) => g.textH - c.notesH;
 
-  const drawLine = (c: Cur, line: Line, size: number, lead: number, bold = false, labels: string[] = []) => {
+  const drawLine = (c: Cur, line: Line, size: number, lead: number, bold = false, labels: string[] = [], hd = false) => {
     const by = baseline(c.y, lead, size);
     let li = 0;
     // 표시 자리는 별표 하나 너비로 잡아 두었다: 표시가 더 길면(**, 2 …) 뒤 글자를 그만큼 민다
@@ -380,7 +413,7 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
         shift += Math.max(0, ms.text(label, false, size * 0.6) - one);
         continue;
       }
-      c.page.items.push({ k: 't', x: c.x0 + s.x + shift, y: by, text: s.text, size, bold: bold || s.bold });
+      c.page.items.push({ k: 't', x: c.x0 + s.x + shift, y: by, text: s.text, size, bold: bold || s.bold, hd: hd || undefined });
     }
     line.notes.forEach((n, i) => {
       c.notes.push({ label: labels[i], text: n });
@@ -410,8 +443,8 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
     }
   };
 
-  const centered = (c: Cur, text: string, size: number, bold: boolean, lead: number) => {
-    for (const l of breakLines([{ text, bold }], g.textW, size, ms, { center: true })) drawLine(c, l, size, lead, bold);
+  const centered = (c: Cur, text: string, size: number, bold: boolean, lead: number, hd = false) => {
+    for (const l of breakLines([{ text, bold }], g.textW, size, ms, { center: true, hd })) drawLine(c, l, size, lead, bold, [], hd);
   };
 
   const placeBlocks = (blocks: Block[]) => {
@@ -419,14 +452,14 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
       if (b.t === 'p') {
         const size = b.small ? g.size * 0.85 : g.size;
         const width = b.quote ? g.textW - g.size * 2 : g.textW;
-        const lines = breakLines(b.runs, width, size, ms, { indent: b.indent ? g.size : 0, justify: !b.center, center: b.center });
+        const lines = breakLines(b.runs, width, size, ms, { indent: b.indent && !(o.dialogue === 'flush' && b.dialogue) ? g.size : 0, justify: !b.center, center: b.center });
         if (b.quote) for (const l of lines) for (const s of l.segs) s.x += g.size * 2;
         placeLines(lines, size, b.small ? g.lead * 0.85 : g.lead);
       } else if (b.t === 'h') {
         let c = cur ?? bodyPage();
         if (c.y + g.lead * 3.5 > room(c)) c = bodyPage();
         if (c.y > 0) c.y += g.lead * 0.8;
-        for (const l of breakLines([{ text: b.text, bold: true }], g.textW, g.size * 1.08, ms)) drawLine(c, l, g.size * 1.08, g.lead, true);
+        for (const l of breakLines([{ text: b.text, bold: true }], g.textW, g.size * 1.08, ms, { hd: true })) drawLine(c, l, g.size * 1.08, g.lead, true, [], true);
         c.y += g.lead * 0.4;
       } else if (b.t === 'scene') {
         let c = cur ?? bodyPage();
@@ -462,10 +495,10 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
   {
     const c = newPage('title');
     c.y = g.textH * 0.3;
-    centered(c, o.title || '제목 없음', g.size * 2.1, true, g.size * 2.1 * 1.45);
+    centered(c, o.title || '제목 없음', g.size * 2.1, true, g.size * 2.1 * 1.45, true);
     if (o.subtitle) {
       c.y += g.lead * 0.4;
-      centered(c, o.subtitle, g.size * 1.1, false, g.lead);
+      centered(c, o.subtitle, g.size * 1.1, false, g.lead, true);
     }
     if (o.author) {
       c.y = Math.max(c.y + g.lead * 2, g.textH * 0.62);
@@ -497,11 +530,14 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
       continue;
     }
     if (s.kind === 'part') {
-      if (o.rightStart) toRecto();
+      if (o.rightStart || (o.romanFront && !arabicFrom)) toRecto();
+      secId = s.id;
+      partSeen = true;
       const c = newPage('part');
+      if (!arabicFrom) arabicFrom = c.page.n;
       toc.push({ id: s.id, title: s.title, level: 0, page: c.page.n });
       c.y = g.textH * 0.36;
-      centered(c, s.title, g.size * 1.6, true, g.size * 1.6 * 1.5);
+      centered(c, s.title, g.size * 1.6, true, g.size * 1.6 * 1.5, true);
       if (s.blocks.length) {
         c.y += g.lead;
         placeBlocks(s.blocks.map((b) => (b.t === 'p' ? { ...b, center: true, indent: false } : b)));
@@ -511,17 +547,19 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
       continue;
     }
     if (s.kind === 'chapter') {
-      if (o.rightStart) toRecto();
+      if (o.rightStart || (o.romanFront && !arabicFrom)) toRecto();
       head = s.title;
       chapterNotes = 0;
+      secId = s.id;
       const c = newPage('chapter');
-      const inPart = toc.some((t) => t.level === 0) && !s.id.startsWith('m-');
+      if (!arabicFrom) arabicFrom = c.page.n;
+      const inPart = partSeen && !s.id.startsWith('m-');
       toc.push({ id: s.id, title: s.title || '제목 없음', level: inPart ? 1 : 0, page: c.page.n });
       c.y = g.textH * (o.chapterDrop === 'low' ? 0.3 : 0.18);
       if (s.title) {
         const left = o.chapterAlign === 'left';
         const line = (text: string, size: number, bold: boolean) => {
-          for (const l of breakLines([{ text, bold }], g.textW, size, ms, { center: !left })) drawLine(c, l, size, size * 1.5, bold);
+          for (const l of breakLines([{ text, bold }], g.textW, size, ms, { center: !left, hd: true })) drawLine(c, l, size, size * 1.5, bold, [], true);
         };
         const sp = o.chapterNumber && o.chapterNumber !== 'asis' ? splitChapterTitle(s.title) : null;
         if (sp) {
@@ -557,6 +595,16 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
   finishNotes();
   if (o.multipleOf4 && !sections.some((s) => s.kind === 'colophon')) while (pages.length % 4) newPage('blank');
   finishNotes();
+
+  // 쪽 번호로 보이는 값: 앞붙이를 로마 숫자로 따로 세면 본문 첫 쪽이 1
+  const roman = (n: number) => {
+    const t: [number, string][] = [[10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+    let r = '';
+    for (const [v, c] of t) while (n >= v) ((r += c), (n -= v));
+    return r;
+  };
+  const shown = (n: number) => (o.romanFront && arabicFrom ? (n < arabicFrom ? roman(n) : String(n - arabicFrom + 1)) : String(n));
+  for (const e of toc) e.page = o.romanFront && arabicFrom ? e.page - arabicFrom + 1 : e.page;
 
   // ---- 목차 채우기 (쪽수는 조판이 끝난 뒤에 알 수 있다)
   if (tocSlots.length) {
@@ -598,11 +646,27 @@ export function layoutBook(sections: Section[], metrics: Metrics, o: PrintOption
       const w = ms.text(t, false, hs);
       p.items.push({ k: 't', x: recto ? g.W - g.outer - w : g.outer, y: g.top - 7.5 * MM, text: t, size: hs });
     }
-    if (p.folio) {
-      const t = String(p.n);
+    if ((p.folio || (o.romanFront && p.kind === 'toc')) && o.pageNo !== 'none') {
+      const num = shown(p.n);
+      const t = o.pageFmt === 'dash' ? `- ${num} -` : o.pageFmt === 'dot' ? `· ${num} ·` : num;
       const w = ms.text(t, false, hs);
-      p.items.push({ k: 't', x: recto ? g.W - g.outer - w : g.outer, y: g.H - g.bottom + 11 * MM, text: t, size: hs });
+      const x = o.pageNo === 'center' ? (recto ? g.inner : g.outer) + (g.textW - w) / 2 : recto ? g.W - g.outer - w : g.outer;
+      p.items.push({ k: 't', x, y: g.H - g.bottom + 11 * MM, text: t, size: hs });
     }
   }
-  return { pages, geo: g, toc };
+
+  // ---- 인쇄 전 점검: 장 끝에 몇 줄만 남은 쪽 · 글이 듬성한 쪽
+  const issues: Issue[] = [];
+  const titles = new Map(sections.map((x) => [x.id, x.title || '제목 없음']));
+  const bySec = new Map<string, Page[]>();
+  for (const p of pages) if (p.sec && (p.kind === 'chapter' || p.kind === 'body')) (bySec.get(p.sec) ?? bySec.set(p.sec, []).get(p.sec)!).push(p);
+  for (const [id, ps] of bySec) {
+    ps.forEach((p, i) => {
+      const last = i === ps.length - 1;
+      const shownNo = Number(shown(p.n)) || p.n;
+      if (last && ps.length > 1 && (p.lines ?? 99) <= 3) issues.push({ type: 'short-end', id, title: titles.get(id) ?? '', page: shownNo, value: p.lines ?? 0 });
+      else if (!last && (p.fill ?? 1) < 0.55) issues.push({ type: 'gap', id, title: titles.get(id) ?? '', page: shownNo, value: Math.round((p.fill ?? 0) * 100) });
+    });
+  }
+  return { pages, geo: g, toc, issues };
 }

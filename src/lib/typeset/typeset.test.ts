@@ -200,3 +200,122 @@ describe('장 시작 서식', () => {
     expect(x({ firstIndent: false })).toBeLessThan(x({}));
   });
 });
+
+import { convertQuotes } from './blocks';
+describe('서식 더하기', () => {
+  const longBody = (para + '\n\n').repeat(14);
+  const nodesN = [
+    { id: 'm-toc', kind: 'chapter', title: '목차', body: '' },
+    { id: 'c1', kind: 'chapter', title: '1장 바람', body: longBody },
+    { id: 'c2', kind: 'chapter', title: '2장 정원', body: longBody },
+  ];
+  const run = (o: object, nn = nodesN) => countPages(nn, { ...opts, multipleOf4: false, ...o }, fonts);
+  it('따옴표 모양을 통일하고, 쌍이 안 맞으면 건드리지 않는다', () => {
+    expect(convertQuotes('"안녕" 하고 “반가워” 했다.', 'corner')).toBe('「안녕」 하고 「반가워」 했다.');
+    expect(convertQuotes('"안녕" 그리고 「반가워」', 'curly')).toBe('“안녕” 그리고 “반가워”');
+    expect(convertQuotes('그가 말했다. "짝이 안 맞는', 'corner')).toBe('그가 말했다. "짝이 안 맞는');
+    expect(convertQuotes('![설명](/api/bimg/a "10x10")', 'corner')).toBe('![설명](/api/bimg/a "10x10")');
+    expect(convertQuotes('“그는 ‘응’ 했다”', 'corner')).toBe('「그는 『응』 했다」');
+    expect(convertQuotes('"a"', 'keep')).toBe('"a"');
+  });
+  it('대사 문단만 들여쓰기를 끈다', () => {
+    const nn = [{ id: 'c1', kind: 'chapter', title: '장', body: '평범한 문단입니다.\n\n“대사입니다.” 그가 말했다.\n\n또 평범한 문단.' }];
+    const xs = (o: object) => {
+      const r = layoutBook(toSections(nn, true), metricsOf(fonts), { ...opts, multipleOf4: false, ...o });
+      const items = r.pages.find((p) => p.kind === 'chapter')!.items.filter((i) => i.k === 't') as { x: number; text: string }[];
+      return ['평범한', '“대사입니다.”', '또'].map((t) => items.find((i) => i.text === t || i.text.startsWith(t))!.x);
+    };
+    const a = xs({});
+    const b = xs({ dialogue: 'flush' });
+    expect(a[1]).toBeGreaterThan(b[1]);
+    expect(b[0]).toBe(a[0]);
+    expect(b[2]).toBe(a[2]);
+  });
+  it('줄 간격 · 자간이 쪽수와 글 너비에 반영된다', () => {
+    expect(run({ leading: 1.5 }).pages).toBeLessThanOrEqual(run({ leading: 1.95 }).pages);
+    const ms0 = new Measure(metricsOf(fonts), 0);
+    const ms1 = new Measure(metricsOf(fonts), 0.05);
+    expect(ms1.text('가나다', false, 10)).toBeCloseTo(ms0.text('가나다', false, 10) + 1.5, 5);
+  });
+  it('쪽 번호 위치 · 모양 · 앞붙이 로마 숫자', () => {
+    const folios = (o: object) => {
+      const r = layoutBook(toSections(nodesN, true), metricsOf(fonts), { ...opts, multipleOf4: false, ...o });
+      return r.pages.map((p) => ({ n: p.n, kind: p.kind, t: (p.items.filter((i) => i.k === 't' && i.y > r.geo.H - r.geo.bottom + 5) as { text: string; x: number }[])[0] }));
+    };
+    const plain = folios({});
+    const chapterPage = plain.find((p) => p.kind === 'chapter')!;
+    expect(chapterPage.t.text).toBe(String(chapterPage.n));
+    expect(folios({ pageFmt: 'dash' }).find((p) => p.kind === 'chapter')!.t.text).toBe(`- ${chapterPage.n} -`);
+    expect(folios({ pageNo: 'none' }).every((p) => !p.t)).toBe(true);
+    const c = folios({ pageNo: 'center' }).find((p) => p.kind === 'chapter')!.t.x;
+    expect(c).not.toBe(chapterPage.t.x);
+    const rm = folios({ romanFront: true });
+    expect(rm.find((p) => p.kind === 'toc')!.t.text).toMatch(/^[ivx]+$/);
+    expect(rm.find((p) => p.kind === 'chapter')!.t.text).toBe('1');
+    const toc = run({ romanFront: true }).toc;
+    expect(toc[0].page).toBe(1);
+  });
+  it('장 끝에 몇 줄만 남은 쪽을 찾고, 줄 간격으로 풀리는지 제안한다', () => {
+    // 한 쪽 가득 + 두 줄: 줄 간격을 줄이면 한 쪽으로 들어간다
+    const geo = layoutBook(toSections([{ id: 'x', kind: 'chapter', title: '장', body: '가' }], true), metricsOf(fonts), { ...opts, multipleOf4: false }).geo;
+    const per = Math.floor((geo.textH - geo.lead * 1.6 - geo.textH * 0.18) / geo.lead);
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `${i + 1}번째 줄입니다.`).join('\n');
+    let found = false;
+    for (let n = per + 1; n < per + 6 && !found; n++) {
+      const nn = [{ id: 'c1', kind: 'chapter', title: '장', body: lines(n) }];
+      const r = countPages(nn, { ...opts, multipleOf4: false }, fonts);
+      if (r.issues.some((i) => i.type === 'short-end')) {
+        found = true;
+        expect(r.issues[0].value).toBeLessThanOrEqual(3);
+        expect(r.suggestions.length).toBeGreaterThan(0);
+        expect(r.suggestions[0].issues).toBeLessThan(r.issues.length);
+      }
+    }
+    expect(found).toBe(true);
+  });
+  it('제목 글꼴을 따로 쓰면 PDF 에 글꼴이 둘 들어가고, 점검 보고서가 채워진다', async () => {
+    const head = openFonts(new Uint8Array(readFileSync('public/fonts/NanumGothic-Regular.ttf')), new Uint8Array(readFileSync('public/fonts/NanumGothic-Bold.ttf')), await subsetterFrom(readFileSync('node_modules/harfbuzzjs/dist/harfbuzz-subset.wasm')), 'NanumGothic');
+    const f = openFonts(fonts.regular, fonts.bold, head.subset, 'GowunBatang', head);
+    const out = await buildPrintPdf(nodes2(), { ...opts, multipleOf4: false, bleed: true }, f, new Map([['/api/bimg/abc', { bytes: png(160, 90), mime: 'image/png', w: 1600, h: 900 }]]));
+    const txt = Buffer.from(out.bytes).toString('latin1');
+    expect(txt).toMatch(/NanumGothic-Bold/);
+    expect(txt).toMatch(/GowunBatang-Regular/);
+    expect(out.report.fonts.map((x) => x.role)).toEqual(['본문', '제목']);
+    expect(out.report.pageMm[0]).toBeCloseTo(out.report.trimMm[0] + 6, 1);
+    expect(out.report.pages).toBe(out.pages);
+  }, 60_000);
+  it('이미지 해상도(dpi)를 알린다', async () => {
+    const nn = [{ id: 'c1', kind: 'chapter', title: '장', body: '글\n\n![그림](/api/bimg/abc "1600x900")\n\n글' }];
+    const out = await buildPrintPdf(nn, { ...opts, multipleOf4: false }, fonts, new Map([['/api/bimg/abc', { bytes: png(160, 90), mime: 'image/png', w: 160, h: 90 }]]));
+    expect(out.report.images).toHaveLength(1);
+    expect(out.report.images[0].dpi).toBeGreaterThan(50);
+  }, 30_000);
+});
+
+import { makeSpecSheet, specRows } from './spec';
+import { DEFAULT_PRINT } from './settings';
+describe('인쇄 사양서', () => {
+  it('A4 한 장 PDF 로 판형 · 글꼴 · 사진 해상도를 적는다', async () => {
+    const f = openFonts(fonts.regular, fonts.bold, await subsetterFrom(readFileSync('node_modules/harfbuzzjs/dist/harfbuzz-subset.wasm')), 'GowunBatang');
+    const nn = [{ id: 'c1', kind: 'chapter', title: '장', body: '글\n\n![그림](/api/bimg/abc "160x90")\n\n글' }];
+    const out = await buildPrintPdf(nn, { ...opts, bleed: true }, f, new Map([['/api/bimg/abc', { bytes: png(160, 90), mime: 'image/png', w: 160, h: 90 }]]));
+    const info = { title: '시험 책', author: '시험', date: '2026-11-27', report: out.report, settings: { ...DEFAULT_PRINT, bleed: true } };
+    const rows = specRows(info);
+    expect(rows.find(([a]) => a === '완성(재단) 크기')![1]).toContain('152');
+    expect(rows.find(([a]) => a === 'PDF 쪽 크기')![1]).toContain('도련');
+    expect(rows.find(([a]) => a === '사진')![1]).toContain('dpi');
+    const bytes = await makeSpecSheet(info, f);
+    expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe('%PDF-');
+    expect(bytes.length).toBeLessThan(200_000);
+    if (process.env.TYPESET_OUT) writeFileSync(process.env.TYPESET_OUT.replace('.pdf', '-spec.pdf'), bytes);
+  }, 30_000);
+});
+
+describe('목차 단계', () => {
+  it('부가 없으면 장은 모두 같은 단, 부가 나오면 그 뒤 장은 한 단 들여 쓴다', () => {
+    const lv = (nn: { id: string; kind: string; title: string; body: string }[]) => countPages(nn, { ...opts, multipleOf4: false }, fonts).toc.map((e) => e.level);
+    const ch = (id: string) => ({ id, kind: 'chapter', title: id, body: '글' });
+    expect(lv([{ id: 'm-toc', kind: 'chapter', title: '목차', body: '' }, ch('a'), ch('b'), ch('c')])).toEqual([0, 0, 0]);
+    expect(lv([{ id: 'm-toc', kind: 'chapter', title: '목차', body: '' }, { id: 'p', kind: 'part', title: '1부', body: '' }, ch('a'), ch('b')])).toEqual([0, 1, 1]);
+  });
+});

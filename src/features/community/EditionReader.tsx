@@ -12,6 +12,7 @@ import { ago, fmtDate } from '../../lib/text';
 import type { ReadNode } from '../../lib/types';
 import { confirmBox, Icon, Menu, Modal, Spinner, toast } from '../../lib/ui';
 import { loadPrefs, Reader } from '../library/Reader';
+import { bookStyleOf } from '../../lib/bookStyle';
 import { faceCss, isFace, loadReaderFace } from '../../lib/readerFonts';
 
 interface Anno {
@@ -33,7 +34,7 @@ interface Anno {
 }
 interface EditionData {
   edition: { id: string; number: number; note: string; created: number; title: string; author: string; book_id: string };
-  book: { id: string; title: string; owner: string; owner_name: string; world_id: string | null; mine: boolean };
+  book: { id: string; title: string; owner: string; owner_name: string; world_id: string | null; mine: boolean; print?: unknown };
   nodes: (ReadNode & { sort: number })[];
   editions: { id: string; number: number; note: string; created: number }[];
   likes: { node_id: string; n: number; mine: number }[];
@@ -60,10 +61,12 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
       .catch(() => {});
   }, [d?.book.world_id]);
   const prefs = loadPrefs();
+  // 「이 책의 글꼴」이면 작가가 인쇄 설정에서 고른 글꼴 (주석 달며 읽는 이 화면은 글만 같게, 서식은 쪽 넘김 읽기에서)
+  const font = prefs.font === 'book' ? (bookStyleOf({ print: d?.book.print })?.face ?? 'serif') : prefs.font;
   const [, setFontTick] = useState(0);
   useEffect(() => {
-    if (isFace(prefs.font)) loadReaderFace(prefs.font).then(() => setFontTick((t) => t + 1)).catch(() => {});
-  }, [prefs.font]);
+    if (isFace(font)) loadReaderFace(font).then(() => setFontTick((t) => t + 1)).catch(() => {});
+  }, [font]);
   const col = useRef<HTMLDivElement>(null);
   const sc = useRef<HTMLDivElement>(null);
 
@@ -230,6 +233,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
         nodes={d.nodes}
         progressKey={`e:${d.book.id}`}
         lineBreaks
+        bookStyle={bookStyleOf({ print: d.book.print })}
         forceMode="page"
         entries={entries}
         onExit={() => setPageMode(false)}
@@ -242,7 +246,7 @@ export function EditionReader({ editionId, nodeId, noteId }: { editionId: string
   const isLatest = d.editions[0]?.id === d.edition.id;
 
   return (
-    <div className={`reader t-${prefs.theme}${prefs.font === 'sans' ? ' f-sans' : ''}`} style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh), ...(isFace(prefs.font) ? { ['--rfont' as string]: faceCss(prefs.font) } : {}) }}>
+    <div className={`reader t-${prefs.theme}${font === 'sans' ? ' f-sans' : ''}`} style={{ ['--fs' as string]: `${prefs.fs}px`, ['--lh' as string]: String(prefs.lh), ...(isFace(font) ? { ['--rfont' as string]: faceCss(font) } : {}) }}>
       <div className="r-bar">
         <button className="icon-btn" onClick={() => (history.length > 1 ? history.back() : go('hall'))} aria-label="닫기">
           <Icon name="back" />

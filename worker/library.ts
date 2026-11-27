@@ -97,6 +97,26 @@ interface NodeRow extends Row {
   chars: number;
 }
 
+/** 책 meta 의 인쇄 설정 중 읽는 화면이 쓸 서식만 (값을 정해진 것만 통과시켜 돌려준다) */
+const FACE_IDS = ['gowun', 'nanum', 'maru', 'noto', 'nanumg', 'notos'];
+function printStyle(meta: unknown): Record<string, unknown> | null {
+  const p = (meta as { print?: unknown } | null)?.print;
+  if (!p || typeof p !== 'object') return null;
+  const o = p as Record<string, unknown>;
+  const pick = (k: string, vals: string[]) => (typeof o[k] === 'string' && vals.includes(o[k] as string) ? o[k] : undefined);
+  const t = Number(o.tracking);
+  return {
+    face: pick('face', FACE_IDS),
+    headFace: pick('headFace', ['same', ...FACE_IDS]),
+    chapterAlign: pick('chapterAlign', ['center', 'left']),
+    chapterDrop: pick('chapterDrop', ['normal', 'low']),
+    chapterNumber: pick('chapterNumber', ['asis', 'plain', 'je']),
+    firstIndent: typeof o.firstIndent === 'boolean' ? o.firstIndent : undefined,
+    dialogue: pick('dialogue', ['indent', 'flush']),
+    quotes: pick('quotes', ['keep', 'curly', 'corner']),
+    tracking: Number.isFinite(t) ? Math.max(-0.05, Math.min(0.05, t)) : undefined,
+  };
+}
 const str = (v: unknown, max: number) => cutText(String(v ?? '').normalize('NFC'), max);
 const num = (v: unknown, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 const optStr = (v: unknown, max: number) => (v == null ? null : str(v, max));
@@ -1249,7 +1269,7 @@ export class Library extends DurableObject<Env> {
     if (!e) return fail('아직 보여 줄 판이 없어요.', 404);
     const nodes = this.rows('SELECT node_id AS id, depth, kind, title, body FROM edition_nodes WHERE edition_id = ? ORDER BY sort', e.id);
     const bm = parseJson(book.meta) as { coverImage?: number; coverMode?: string };
-    return json({ book: { title: book.title, author: book.author, color: book.color, cover: bm.coverImage && bm.coverMode !== 'text' ? bm.coverImage : null, blurb: str((parseJson(book.meta) as { blurb?: unknown }).blurb, 3000) }, edition: e, nodes });
+    return json({ book: { title: book.title, author: book.author, color: book.color, cover: bm.coverImage && bm.coverMode !== 'text' ? bm.coverImage : null, blurb: str((parseJson(book.meta) as { blurb?: unknown }).blurb, 3000), print: printStyle(parseJson(book.meta)) }, edition: e, nodes });
   }
   private unshare(user: UserRow, bookId: string) {
     this.ownBook(user, bookId);
@@ -1767,7 +1787,7 @@ export class Library extends DurableObject<Env> {
     const owner = this.one('SELECT nickname FROM users WHERE id = ?', book.owner);
     return json({
       edition: e,
-      book: { id: book.id, title: book.title, owner: book.owner, owner_name: owner?.nickname ?? '', world_id: book.share_world ? book.world_id : null, mine: book.owner === user.id, blurb: str((parseJson(book.meta) as { blurb?: unknown }).blurb, 3000) },
+      book: { id: book.id, title: book.title, owner: book.owner, owner_name: owner?.nickname ?? '', world_id: book.share_world ? book.world_id : null, mine: book.owner === user.id, blurb: str((parseJson(book.meta) as { blurb?: unknown }).blurb, 3000), print: printStyle(parseJson(book.meta)) },
       nodes,
       editions,
       likes,

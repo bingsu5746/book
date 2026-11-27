@@ -28,11 +28,23 @@ export interface PrintSettings {
   chapterDrop: NonNullable<PrintOptions['chapterDrop']>;
   chapterNumber: NonNullable<PrintOptions['chapterNumber']>;
   firstIndent: boolean;
+  /** 제목(표제지 · 부 · 장 · 소제목) 글꼴: same 은 본문과 같게 */
+  headFace: FaceId | 'same';
+  leading: number;
+  tracking: number;
+  quotes: NonNullable<PrintOptions['quotes']>;
+  dialogue: NonNullable<PrintOptions['dialogue']>;
+  pageNo: NonNullable<PrintOptions['pageNo']>;
+  pageFmt: NonNullable<PrintOptions['pageFmt']>;
+  romanFront: boolean;
 }
-export const DEFAULT_PRINT: PrintSettings = { size: 'sinkook', font: 'normal', face: 'gowun', rightStart: true, heads: true, noteStyle: 'star', multipleOf4: true, bleed: false, chapterAlign: 'center', chapterDrop: 'normal', chapterNumber: 'asis', firstIndent: true };
+export const DEFAULT_PRINT: PrintSettings = { size: 'sinkook', font: 'normal', face: 'gowun', rightStart: true, heads: true, noteStyle: 'star', multipleOf4: true, bleed: false, chapterAlign: 'center', chapterDrop: 'normal', chapterNumber: 'asis', firstIndent: true, headFace: 'same', leading: 1.78, tracking: 0, quotes: 'keep', dialogue: 'indent', pageNo: 'outer', pageFmt: 'plain', romanFront: false };
 export function printSettingsOf(meta: Record<string, unknown> | undefined): PrintSettings {
   const p = (meta?.print && typeof meta.print === 'object' ? meta.print : {}) as Partial<PrintSettings>;
   const s = { ...DEFAULT_PRINT, ...p };
   if (!(s.face in FACES)) s.face = DEFAULT_PRINT.face;
+  if (s.headFace !== 'same' && !(s.headFace in FACES)) s.headFace = 'same';
+  s.leading = Math.min(2.1, Math.max(1.4, Number(s.leading) || DEFAULT_PRINT.leading));
+  s.tracking = Math.min(0.05, Math.max(-0.05, Number(s.tracking) || 0));
   return s;
 }

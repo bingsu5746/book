@@ -1,6 +1,7 @@
 // 쪽 나누기 (아티팩트 「작은 서재」의 방식을 옮김): 측정용 쪽에 문단을 하나씩 넣어 보고, 넘치면 다음 쪽.
 // 긴 문단 · 목록 · 표는 쪽 경계에서 쪼갠다. 모든 덩어리에 data-n(장 id) · data-o(장 안 글자 위치)를 달아
 // 화면 크기가 달라도 같은 자리를 다시 찾을 수 있게 한다.
+import { chapterHeading, convertQuotes, type BookStyle } from './bookStyle';
 import { renderMd } from './md';
 import type { ReadNode } from './types';
 
@@ -44,7 +45,8 @@ function linkNames(el: HTMLElement, re: RegExp, seen: Set<string>) {
   }
 }
 
-export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean; names?: string[]; breaks?: boolean } = {}): HTMLElement[] {
+export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean; names?: string[]; breaks?: boolean; style?: BookStyle } = {}): HTMLElement[] {
+  const style = opts.style;
   const names = (opts.names ?? []).filter((n) => n.trim().length >= 2).sort((a, b) => b.length - a.length);
   const nameRe = names.length ? new RegExp(names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g') : null;
   const out: HTMLElement[] = [];
@@ -53,7 +55,17 @@ export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean; names?: 
   for (const node of nodes) {
     const head = (tag: string, text: string) => {
       const h = document.createElement(tag);
-      h.textContent = text;
+      // 서식에서 「1장 바람」을 번호와 이름으로 가르기로 했으면 두 줄 (글자는 이어 붙으면 「1장 바람」과 같다)
+      const ch = tag === 'h2' ? chapterHeading(text, style?.chapterNumber) : { name: text };
+      if (ch.num) {
+        const a = document.createElement('span');
+        a.className = 'cn';
+        a.textContent = ch.num;
+        const b = document.createElement('span');
+        b.className = 'ct';
+        b.textContent = ch.name;
+        h.append(a, ' ', b);
+      } else h.textContent = text;
       h.dataset.n = node.id;
       h.dataset.o = '0';
       h.dataset.toc = String(toc++);
@@ -72,7 +84,7 @@ export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean; names?: 
     }
     lastKind = node.kind;
     const wrap = document.createElement('div');
-    wrap.innerHTML = renderMd(node.body, opts);
+    wrap.innerHTML = renderMd(style?.quotes && style.quotes !== 'keep' ? convertQuotes(node.body, style.quotes) : node.body, opts);
     let o = 0;
     const seen = new Set<string>();
     for (const c of [...wrap.childNodes]) {
@@ -85,6 +97,7 @@ export function buildBlocks(nodes: ReadNode[], opts: { links?: boolean; names?: 
       else continue;
       el.dataset.n = node.id;
       el.dataset.o = String(o);
+      if (el.tagName === 'P' && /^[“"「『‘]/.test(el.textContent ?? '')) el.classList.add('dlg');
       if (nameRe && !/^H[1-6]$/.test(el.tagName)) linkNames(el, nameRe, seen);
       o += (el.textContent ?? '').length;
       out.push(el);

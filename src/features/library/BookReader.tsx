@@ -1,3 +1,4 @@
+import { bookStyleOf } from '../../lib/bookStyle';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api';
 import { loadWorld, toRefs } from '../../lib/world';
@@ -86,6 +87,7 @@ export function BookReader({ bookId, nodeId, at, find }: { bookId: string; nodeI
       nodes={nodes}
       progressKey={`b:${bookId}`}
       lineBreaks={data.book.kind === 'write'}
+      bookStyle={bookStyleOf(data.book.meta)}
       initialFind={find ?? undefined}
       start={nodeId ? { n: nodeId, o: Number(at ?? 0) } : null}
       onExit={() => (history.length > 1 ? history.back() : go('library'))}

@@ -1,5 +1,5 @@
 // 내보내기: 책 한 권을 PDF · Word · 전자책 · 글 · 마크다운 · 인쇄용 웹문서로. 원고(쓰는 중)와 다 쓴 책 모두 같은 창을 쓴다.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { makeDocx } from '../lib/docx';
 import { makeEpubWithCover } from '../lib/epub';
 import { api } from '../lib/api';
@@ -9,8 +9,8 @@ import { loadFull, toReadNodes, type FullBook } from '../lib/store';
 import type { ReadNode } from '../lib/types';
 import { Modal, Spinner, toast } from '../lib/ui';
 import { DEFAULT_PRINT, FACES, printSettingsOf, type PrintSettings } from '../lib/typeset/settings';
-import { FacePicker } from './FacePicker';
-import { SIZES } from '../lib/typeset/layout';
+import type { Fonts, PrintReport, Suggestion } from '../lib/typeset';
+import { PrintPanel } from './PrintPanel';
 
 type Fmt = 'pdf' | 'docx' | 'epub' | 'txt' | 'md' | 'html';
 const FORMATS: { id: Fmt; label: string; desc: string }[] = [
@@ -29,7 +29,8 @@ export function ExportDialog({ bookId, onClose }: { bookId: string; onClose: () 
   const [ps, setPs] = useState<PrintSettings>(DEFAULT_PRINT);
   const [withMatter, setWithMatter] = useState(true);
   const [status, setStatus] = useState('');
-  const [done, setDone] = useState<{ pages: number; missing: string[] } | null>(null);
+  const [done, setDone] = useState<{ report: PrintReport; suggestions: Suggestion[]; ps: PrintSettings } | null>(null);
+  const fontsRef = useRef<Fonts | null>(null);
   const [off, setOff] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
@@ -67,17 +68,24 @@ export function ExportDialog({ bookId, onClose }: { bookId: string; onClose: () 
       else {
         // 인쇄용 PDF: 글꼴 · 그림을 받아 조판한다 (설정은 책에 남겨 집필실 목차 쪽수와 맞춘다)
         if (book.owner) void api(`books/${book.id}`, { method: 'PATCH', body: { meta: { ...book.meta, print: ps } } }).catch(() => {});
-        setStatus(`인쇄용 글꼴(${FACES[ps.face].name})을 받는 중… (처음 한 번 약 ${FACES[ps.face].mb}MB)`);
+        // 이 창에서 이어 전자책을 받아도 같은 서식이 되게, 불러 둔 책에도 바로 적어 둔다
+        setData((d) => (d ? { ...d, book: { ...d.book, meta: { ...d.book.meta, print: ps } } } : d));
+        const mbs = FACES[ps.face].mb + (ps.headFace !== 'same' && ps.headFace !== ps.face ? FACES[ps.headFace].mb : 0);
+        setStatus(`인쇄용 글꼴을 받는 중… (처음 한 번 약 ${Math.round(mbs)}MB)`);
         const t = await import('../lib/typeset');
         const { loadImages, imageSrcs } = await import('../lib/typeset/images');
-        const fonts = await t.loadPrintFonts(ps.face);
+        const fonts = await t.loadPrintFonts(ps.face, ps.headFace);
+        fontsRef.current = fonts;
         setStatus('그림을 받는 중…');
         const images = await loadImages(imageSrcs(all.map((n) => n.body)));
         setStatus('조판하는 중…');
-        const out = await t.buildPrintPdf(all, { ...ps, title: book.title, subtitle: book.subtitle, author: book.author }, fonts, images);
+        const popts = { ...ps, title: book.title, subtitle: book.subtitle, author: book.author };
+        const out = await t.buildPrintPdf(all, popts, fonts, images);
         download(`${name} (인쇄용).pdf`, new Blob([out.bytes as BlobPart], { type: 'application/pdf' }));
+        // 점검에 걸린 곳이 있으면 줄 간격 · 자간 · 글자 크기로 풀리는지 알려 준다
+        const suggestions = out.issues.length ? t.countPages(all, popts, fonts).suggestions : [];
         setStatus('');
-        setDone({ pages: out.pages, missing: out.missing });
+        setDone({ report: out.report, suggestions, ps: { ...ps } });
         return;
       }
       toast(`${FORMATS.find((f) => f.id === fmt)!.label} 파일을 만들었어요`);
@@ -122,121 +130,62 @@ export function ExportDialog({ bookId, onClose }: { bookId: string; onClose: () 
               </label>
             ))}
           </div>
-          {fmt === 'pdf' && (
-            <div className="ai-card">
-              <div className="field">
-                본문 글꼴
-                <FacePicker value={ps.face} onChange={(face) => setP({ face })} />
-              </div>
-              <div className="row wrap" style={{ gap: 12 }}>
-                <label className="field">
-                  판형
-                  <select className="input" value={ps.size} onChange={(e) => setP({ size: e.target.value as PrintSettings['size'] })}>
-                    {Object.entries(SIZES).map(([id, s]) => (
-                      <option key={id} value={id}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div className="field">
-                  글자 크기
-                  <div className="seg">
-                    {(
-                      [
-                        ['small', '작게'],
-                        ['normal', '보통'],
-                        ['large', '크게'],
-                      ] as const
-                    ).map(([id, l]) => (
-                      <button key={id} className={ps.font === id ? 'on' : ''} onClick={() => setP({ font: id })}>
-                        {l}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="field">
-                  주석 표시
-                  <div className="seg">
-                    <button className={ps.noteStyle === 'star' ? 'on' : ''} onClick={() => setP({ noteStyle: 'star' })}>
-                      * 별표
-                    </button>
-                    <button className={ps.noteStyle === 'number' ? 'on' : ''} onClick={() => setP({ noteStyle: 'number' })}>
-                      1 숫자
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div className="row wrap" style={{ gap: 12 }}>
-                <div className="field">
-                  장 제목 위치
-                  <div className="seg">
-                    <button className={ps.chapterAlign === 'center' ? 'on' : ''} onClick={() => setP({ chapterAlign: 'center' })}>
-                      가운데
-                    </button>
-                    <button className={ps.chapterAlign === 'left' ? 'on' : ''} onClick={() => setP({ chapterAlign: 'left' })}>
-                      왼쪽 + 짧은 선
-                    </button>
-                  </div>
-                </div>
-                <div className="field">
-                  장 시작 높이
-                  <div className="seg">
-                    <button className={ps.chapterDrop === 'normal' ? 'on' : ''} onClick={() => setP({ chapterDrop: 'normal' })}>
-                      위쪽
-                    </button>
-                    <button className={ps.chapterDrop === 'low' ? 'on' : ''} onClick={() => setP({ chapterDrop: 'low' })}>
-                      아래로 내려서
-                    </button>
-                  </div>
-                </div>
-                <div className="field">
-                  장 번호 (「1장 바람」 꼴 제목)
-                  <div className="seg">
-                    {(
-                      [
-                        ['asis', '쓴 그대로'],
-                        ['plain', '1 / 바람'],
-                        ['je', '제1장 / 바람'],
-                      ] as const
-                    ).map(([id, l]) => (
-                      <button key={id} className={ps.chapterNumber === id ? 'on' : ''} onClick={() => setP({ chapterNumber: id })}>
-                        {l}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <label className="check">
-                <input type="checkbox" checked={ps.firstIndent} onChange={(e) => setP({ firstIndent: e.target.checked })} />장 첫 문단도 들여쓰기 (끄면 첫 문단만 붙여서 시작)
-              </label>
-              <label className="check">
-                <input type="checkbox" checked={ps.rightStart} onChange={(e) => setP({ rightStart: e.target.checked })} />장 · 부를 오른쪽(홀수) 쪽에서 시작 (책에서 흔한 방식, 필요하면 빈 쪽을 넣어요)
-              </label>
-              <label className="check">
-                <input type="checkbox" checked={ps.heads} onChange={(e) => setP({ heads: e.target.checked })} />
-                머리글 (왼쪽 쪽에 책 제목, 오른쪽 쪽에 장 제목)
-              </label>
-              <label className="check">
-                <input type="checkbox" checked={ps.multipleOf4} onChange={(e) => setP({ multipleOf4: e.target.checked })} />
-                전체 쪽수를 4의 배수로 (제본용, 판권면 앞에 빈 쪽)
-              </label>
-              <label className="check">
-                <input type="checkbox" checked={ps.bleed} onChange={(e) => setP({ bleed: e.target.checked })} />
-                도련(재단 여백) 사방 3mm 넣기 — 인쇄소가 요구할 때만
-              </label>
-              <p className="faint tiny" style={{ margin: 0 }}>
-                글꼴은 모두 상업 인쇄에 써도 되는 오픈 라이선스이고, 책에 쓴 글자만 PDF 안에 넣어 어느 인쇄소에서 열어도 같게 나와요. 한자를 쓰면 본명조 · 본고딕을 고르세요(다른 글꼴은 한자를 □ 로 바꿔요). 표지는 책등 두께가 쪽수 · 종이에 따라 달라 따로 만들어야 해요. 인쇄소마다 요구(도련 · 판형 · 색 방식)가 다르니 보내기 전에 그곳 안내를 한 번 확인해 주세요.
-              </p>
-            </div>
-          )}
+          {fmt === 'pdf' && <PrintPanel ps={ps} setP={setP} />}
           {status && <Spinner label={status} />}
           {done && (
             <div className="ai-card">
               <p className="small" style={{ margin: 0 }}>
-                인쇄용 PDF 를 만들었어요 · 모두 {done.pages}쪽
+                인쇄용 PDF 를 만들었어요 · 모두 {done.report.pages}쪽 · {done.report.trimMm[0]}×{done.report.trimMm[1]}mm{done.report.bleed ? ' (도련 포함 PDF)' : ''}
               </p>
-              {!!done.missing.length && <p className="small ages-warn" style={{ margin: 0 }}>글꼴에 없는 글자 {done.missing.join(' ')} 는 □ 로 나왔어요(고운바탕에는 한자가 없어요). 한글로 바꾸거나 괄호에 한글을 함께 적어 주세요.</p>}
+              {!!done.report.missing.length && <p className="small ages-warn" style={{ margin: 0 }}>글꼴에 없는 글자 {done.report.missing.join(' ')} 는 □ 로 나왔어요. 한글로 바꾸거나, 한자는 본명조 · 본고딕을 고르세요.</p>}
+              {done.report.images.some((m) => m.dpi < 150) && <p className="small ages-warn" style={{ margin: 0 }}>해상도가 낮은 사진이 있어요(150dpi 아래 {done.report.images.filter((m) => m.dpi < 150).length}장, 가장 낮은 것 {Math.min(...done.report.images.map((m) => m.dpi))}dpi). 더 큰 사진으로 바꾸면 선명하게 찍혀요.</p>}
+              {!!done.report.issues.length && (
+                <div className="small">
+                  <div className="ages-warn">인쇄 전에 볼 곳 {done.report.issues.length}곳</div>
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    {done.report.issues.slice(0, 8).map((m, i) => (
+                      <li key={i}>
+                        {m.page}쪽 · {m.title} — {m.type === 'short-end' ? `장 마지막 쪽에 ${m.value}줄만 남았어요` : `글이 ${m.value}%만 차 있어요(그림 · 장면 나눔 때문일 수 있어요)`}
+                      </li>
+                    ))}
+                  </ul>
+                  {done.suggestions.map((sg) => (
+                    <div key={sg.label} className="row wrap" style={{ gap: 8, marginTop: 6 }}>
+                      <span>
+                        {sg.label} → 점검 {done.report.issues.length}곳 → {sg.issues}곳, 전체 {sg.pages}쪽
+                      </span>
+                      <button
+                        className="small"
+                        onClick={() => {
+                          setP(sg.patch as Partial<PrintSettings>);
+                          setDone(null);
+                          toast('적용했어요. 「PDF 만들기」를 다시 눌러 주세요');
+                        }}
+                      >
+                        적용
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="row wrap" style={{ gap: 8 }}>
+                <button
+                  className="small"
+                  onClick={async () => {
+                    try {
+                      const { makeSpecSheet } = await import('../lib/typeset/spec');
+                      if (!fontsRef.current || !data) return;
+                      const bytes = await makeSpecSheet({ title: data.book.title, author: data.book.author, date: new Date().toLocaleDateString('sv-SE'), report: done.report, settings: done.ps }, fontsRef.current);
+                      download(`${data.book.title || '책'} (인쇄 사양서).pdf`, new Blob([bytes as BlobPart], { type: 'application/pdf' }));
+                    } catch (e) {
+                      toast((e as Error).message, 'err');
+                    }
+                  }}
+                >
+                  인쇄 사양서 받기 (A4 한 장)
+                </button>
+                <span className="faint tiny">판형 · 여백 · 글꼴 · 사진 해상도를 한 장에 정리해요. PDF 와 함께 인쇄소에 보내세요.</span>
+              </div>
             </div>
           )}
           {hasMatter && (

@@ -4253,3 +4253,44 @@ p.figure .caption {
   font-size: 11px;
   color: var(--faint, var(--muted));
 }
+
+/* 책 서식 (인쇄용 PDF 설정을 리더에도): 장 시작 · 대사 · 제목 글꼴 · 자간 */
+.reader.bs .prose h1,
+.reader.bs .prose h2 {
+  font-family: var(--hfont, var(--rfont));
+}
+.reader.bs .prose {
+  letter-spacing: var(--ls, 0);
+}
+.reader.bs .prose h2 .cn {
+  display: block;
+  font-size: 0.8em;
+  font-weight: 400;
+  margin-bottom: 0.25em;
+}
+.reader.bs .prose h2 .ct {
+  display: block;
+}
+.reader.bs-center .prose h1,
+.reader.bs-center .prose h2 {
+  text-align: center;
+}
+.reader.bs-left .r-body.chapter > h2:first-child::after,
+.reader.bs-left .r-page.chapter .r-body > h2:first-child::after {
+  content: '';
+  display: block;
+  width: 2.4em;
+  border-top: 1px solid currentColor;
+  margin-top: 0.5em;
+}
+.reader.bs-low .r-body.chapter > h2:first-child,
+.reader.bs-low .r-page.chapter .r-body > h2:first-child {
+  padding-top: 5em;
+}
+.reader.bs:not(.bs-nofirst) .prose h2 + p {
+  text-indent: 1em;
+}
+.reader.bs-flush .prose p.dlg,
+.reader.bs-flush .prose h2 + p.dlg {
+  text-indent: 0;
+}

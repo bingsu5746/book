@@ -5,7 +5,8 @@ import { toReadNodes } from '../../lib/store';
 import type { Book, BookNode } from '../../lib/types';
 import { Spinner } from '../../lib/ui';
 import { FACES, printSettingsOf, type FaceId, type PrintSettings } from '../../lib/typeset/settings';
-import { SIZES } from '../../lib/typeset/layout';
+import { SIZES, type Issue } from '../../lib/typeset/layout';
+import type { Suggestion } from '../../lib/typeset';
 
 interface Entry {
   id: string;
@@ -17,7 +18,7 @@ interface Entry {
 export function TocView({ book, nodes, onOpen, onPatchBook }: { book: Book; nodes: BookNode[]; onOpen: (id: string) => void; onPatchBook: (p: Record<string, unknown>) => void }) {
   const ps = printSettingsOf(book.meta);
   const matter = readMatter(book.meta);
-  const [res, setRes] = useState<{ toc: Entry[]; pages: number } | null>(null);
+  const [res, setRes] = useState<{ toc: Entry[]; pages: number; issues: Issue[]; suggestions: Suggestion[] } | null>(null);
   const [status, setStatus] = useState(`인쇄용 글꼴(${FACES[ps.face].name})을 받는 중… (처음 한 번 약 ${FACES[ps.face].mb}MB)`);
   const [err, setErr] = useState('');
   // 글 · 제목 · 설정이 바뀔 때만 다시 센다
@@ -28,13 +29,13 @@ export function TocView({ book, nodes, onOpen, onPatchBook }: { book: Book; node
       try {
         const ts = await import('../../lib/typeset');
         setStatus(`인쇄용 글꼴(${FACES[ps.face].name})을 받는 중… (처음 한 번 약 ${FACES[ps.face].mb}MB)`);
-        const fonts = await ts.loadPrintFonts(ps.face);
+        const fonts = await ts.loadPrintFonts(ps.face, ps.headFace);
         if (!live) return;
         setStatus('');
         const body = toReadNodes(nodes);
         const m = matterNodes(book, { number: book.last_edition ?? undefined, date: new Date().toLocaleDateString('sv-SE') }, { plain: true, toc: tocList(body) });
         const r = ts.countPages([...m.front, ...body, ...m.back], { ...ps, title: book.title, subtitle: book.subtitle, author: book.author }, fonts);
-        if (live) setRes({ toc: r.toc, pages: r.pages });
+        if (live) setRes({ toc: r.toc, pages: r.pages, issues: r.issues, suggestions: r.suggestions });
       } catch (e) {
         if (live) setErr((e as Error).message);
       }
@@ -118,6 +119,40 @@ export function TocView({ book, nodes, onOpen, onPatchBook }: { book: Book; node
           </>
         )}
       </section>
+      {res && (
+        <section className="panel stack">
+          <h3 className="serif" style={{ margin: 0 }}>
+            인쇄 점검
+          </h3>
+          {!res.issues.length && <p className="muted small" style={{ margin: 0 }}>장 끝에 한두 줄만 남은 쪽이나 글이 듬성한 쪽이 없어요.</p>}
+          {!!res.issues.length && (
+            <>
+              <p className="muted small" style={{ margin: 0 }}>
+                인쇄하면 어색해 보일 수 있는 곳이에요. 글을 조금 줄이거나 늘려서 풀 수도 있어요.
+              </p>
+              {res.issues.slice(0, 12).map((m, i) => (
+                <button key={i} className="toc-row" onClick={() => !m.id.startsWith('m-') && onOpen(m.id)}>
+                  <span className="serif">{m.title}</span>
+                  <span className="toc-dots" aria-hidden="true" />
+                  <span className="small muted">
+                    {m.page}쪽 · {m.type === 'short-end' ? `마지막 쪽에 ${m.value}줄만` : `글이 ${m.value}%만 참`}
+                  </span>
+                </button>
+              ))}
+              {res.suggestions.map((sg) => (
+                <div key={sg.label} className="row wrap small" style={{ gap: 8 }}>
+                  <span>
+                    {sg.label} → {res.issues.length}곳 → {sg.issues}곳 (전체 {sg.pages}쪽)
+                  </span>
+                  <button className="small" onClick={() => setPrint(sg.patch as Partial<PrintSettings>)}>
+                    적용
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+        </section>
+      )}
     </div>
   );
 }
